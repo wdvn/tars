@@ -50,7 +50,10 @@ fn getFromShell(allocator: std.mem.Allocator, io: std.Io, name: []const u8) !?[]
         allocator.free(result.stdout);
         return null;
     }
-    return result.stdout;
+    const trimmed = std.mem.trim(u8, result.stdout, " \t\r\n");
+    const owned = try allocator.dupe(u8, trimmed);
+    allocator.free(result.stdout);
+    return owned;
 }
 
 /// First non-null env among candidates (mini-style aliases).

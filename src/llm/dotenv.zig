@@ -11,7 +11,10 @@ pub const DotEnv = struct {
         var map = std.StringHashMap([]const u8).init(allocator);
         errdefer {
             var it = map.iterator();
-            while (it.next()) |e| allocator.free(e.key_ptr.*);
+            while (it.next()) |e| {
+                allocator.free(e.key_ptr.*);
+                allocator.free(e.value_ptr.*);
+            }
             map.deinit();
         }
 
@@ -34,7 +37,10 @@ pub const DotEnv = struct {
 
     pub fn deinit(self: *DotEnv) void {
         var it = self.map.iterator();
-        while (it.next()) |e| self.allocator.free(e.key_ptr.*);
+        while (it.next()) |e| {
+            self.allocator.free(e.key_ptr.*);
+            self.allocator.free(e.value_ptr.*);
+        }
         self.map.deinit();
     }
 
@@ -62,7 +68,10 @@ fn shellGet(allocator: std.mem.Allocator, io: std.Io, name: []const u8) !?[]cons
         allocator.free(result.stdout);
         return null;
     }
-    return result.stdout;
+    const trimmed = std.mem.trim(u8, result.stdout, " \t\r\n");
+    const owned = try allocator.dupe(u8, trimmed);
+    allocator.free(result.stdout);
+    return owned;
 }
 
 fn ingestFile(allocator: std.mem.Allocator, io: std.Io, map: *std.StringHashMap([]const u8), path: []const u8) !void {
@@ -108,6 +117,8 @@ fn ingestFile(allocator: std.mem.Allocator, io: std.Io, map: *std.StringHashMap(
         if (map.contains(key)) continue;
         const owned_key = try allocator.dupe(u8, key);
         errdefer allocator.free(owned_key);
-        try map.put(owned_key, val);
+        const owned_val = try allocator.dupe(u8, val);
+        errdefer allocator.free(owned_val);
+        try map.put(owned_key, owned_val);
     }
 }
