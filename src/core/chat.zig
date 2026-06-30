@@ -83,8 +83,8 @@ pub fn runTurn(
         };
         const elapsed = start.untilNow(io, .awake);
         const duration_ms = @divTrunc(elapsed.toNanoseconds(), 1_000_000);
-        const duration_text = if (run_err != null)
-            std.fmt.allocPrint(allocator, " (failed in {d}ms)", .{duration_ms}) catch ""
+        const duration_text = if (run_err) |err|
+            std.fmt.allocPrint(allocator, " (failed: {s} in {d}ms)", .{@errorName(err), duration_ms}) catch ""
         else
             std.fmt.allocPrint(allocator, " ({d}ms)", .{duration_ms}) catch "";
         defer if (duration_text.len > 0) allocator.free(duration_text);
@@ -123,10 +123,10 @@ pub fn runTurn(
 
             const approved = op.asApproved();
             const act_start = std.Io.Clock.awake.now(io);
-            const outcome = exec.execute(allocator, &approved, sink, .{ .repo_root = cfg.repo_root }) catch {
+            const outcome = exec.execute(allocator, &approved, sink, .{ .repo_root = cfg.repo_root }) catch |err| {
                 const elapsed = act_start.untilNow(io, .awake);
                 const act_duration_ms = @divTrunc(elapsed.toNanoseconds(), 1_000_000);
-                const duration_text = std.fmt.allocPrint(allocator, " (failed in {d}ms)", .{act_duration_ms}) catch "";
+                const duration_text = std.fmt.allocPrint(allocator, " (failed: {s} in {d}ms)", .{@errorName(err), act_duration_ms}) catch "";
                 defer if (duration_text.len > 0) allocator.free(duration_text);
                 if (duration_text.len > 0) sink.emit(io, .{ .kind = .token, .text = duration_text }) catch {};
 
@@ -152,10 +152,10 @@ pub fn runTurn(
             sink.emit(io, .{ .kind = .phase, .text = "verify" }) catch {};
 
             const verify_start = std.Io.Clock.awake.now(io);
-            const verify_out = mon.verify(allocator, sess.id, action_results, &.{}) catch {
+            const verify_out = mon.verify(allocator, sess.id, action_results, &.{}) catch |err| {
                 const elapsed_verify = verify_start.untilNow(io, .awake);
                 const verify_duration_ms = @divTrunc(elapsed_verify.toNanoseconds(), 1_000_000);
-                const duration_text = std.fmt.allocPrint(allocator, " (failed in {d}ms)", .{verify_duration_ms}) catch "";
+                const duration_text = std.fmt.allocPrint(allocator, " (failed: {s} in {d}ms)", .{@errorName(err), verify_duration_ms}) catch "";
                 defer if (duration_text.len > 0) allocator.free(duration_text);
                 if (duration_text.len > 0) sink.emit(io, .{ .kind = .token, .text = duration_text }) catch {};
 

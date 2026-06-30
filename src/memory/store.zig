@@ -64,8 +64,13 @@ const metrics = @import("../metrics/collector.zig");
         metrics.gInc("storage.sql.queries", 1);
         const result = std.process.run(self.allocator, io, .{
             .argv = &.{ "sqlite3", self.db_path, sql },
-        }) catch {
+        }) catch |err| {
             metrics.gInc("storage.sql.errors", 1);
+            var cwd_buf: [1024]u8 = undefined;
+            const dir = std.Io.Dir.cwd();
+            const len = dir.realPath(io, &cwd_buf) catch 0;
+            const cwd = if (len > 0) cwd_buf[0..len] else "unknown";
+            std.debug.print("  [sqlite-err] failed to run sqlite3 process: {s} (cwd: {s})\n", .{@errorName(err), cwd});
             return StoreError.SqliteFailed;
         };
         defer self.allocator.free(result.stderr);
@@ -73,6 +78,11 @@ const metrics = @import("../metrics/collector.zig");
             .exited => |code| {
                 if (code != 0) {
                     metrics.gInc("storage.sql.errors", 1);
+                    var cwd_buf: [1024]u8 = undefined;
+                    const dir = std.Io.Dir.cwd();
+                    const len = dir.realPath(io, &cwd_buf) catch 0;
+                    const cwd = if (len > 0) cwd_buf[0..len] else "unknown";
+                    std.debug.print("  [sqlite-err] sqlite3 exited with code {d}.\n    db_path: '{s}'\n    cwd: '{s}'\n    sql: '{s}'\n    stderr: {s}\n", .{code, self.db_path, cwd, sql, result.stderr});
                     self.allocator.free(result.stdout);
                     return StoreError.SqliteFailed;
                 }
@@ -80,6 +90,11 @@ const metrics = @import("../metrics/collector.zig");
             },
             else => {
                 metrics.gInc("storage.sql.errors", 1);
+                var cwd_buf: [1024]u8 = undefined;
+                const dir = std.Io.Dir.cwd();
+                const len = dir.realPath(io, &cwd_buf) catch 0;
+                const cwd = if (len > 0) cwd_buf[0..len] else "unknown";
+                std.debug.print("  [sqlite-err] sqlite3 process terminated abnormally.\n    db_path: '{s}'\n    cwd: '{s}'\n    sql: '{s}'\n    stderr: {s}\n", .{self.db_path, cwd, sql, result.stderr});
                 self.allocator.free(result.stdout);
                 return StoreError.SqliteFailed;
             },
