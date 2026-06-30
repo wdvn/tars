@@ -15,6 +15,7 @@ pub fn writeEpisodeFromOutcome(
     content: []const u8,
     tags: []const []const u8,
 ) !void {
+    // Embed content locally and store vector + tags inside meta JSON.
     const vec = try embed.embed(allocator, content);
     defer allocator.free(vec);
     const emb_json = try embed.serializeJson(allocator, vec);
@@ -33,6 +34,7 @@ pub fn writeEpisodeFromOutcome(
 }
 
 fn joinTags(allocator: std.mem.Allocator, tags: []const []const u8) ![]const u8 {
+    // Build a JSON string array fragment for episode meta.
     var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(allocator);
     for (tags, 0..) |t, i| {

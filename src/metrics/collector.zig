@@ -22,6 +22,7 @@ pub const Metrics = struct {
     gauges: std.StringHashMap(f64),
 
     pub fn init(allocator: std.mem.Allocator, command: []const u8, label: []const u8) !Metrics {
+        // Stable run id for SQLite persistence and human-readable labels.
         const run_id = try std.fmt.allocPrint(allocator, "run-{s}-{x}", .{ label, std.hash.Wyhash.hash(0, command) });
         const cmd = try allocator.dupe(u8, command);
         const meta = try std.fmt.allocPrint(allocator, "{{\"label\":\"{s}\"}}", .{label});
@@ -37,6 +38,7 @@ pub const Metrics = struct {
     }
 
     pub fn deinit(self: *Metrics) void {
+        // Free every owned hash-map key before destroying the maps.
         var it = self.totals.iterator();
         while (it.next()) |entry| self.allocator.free(entry.key_ptr.*);
         self.totals.deinit();
@@ -57,18 +59,20 @@ pub const Metrics = struct {
     }
 
     pub fn setGauge(self: *Metrics, name: []const u8, val: f64) !void {
-        const key = try self.makeKey(name, "{}");
-        const gop = try self.totals.getOrPut(key);
+        // Gauges are keyed by metric name only (no tag dimension).
+        const name_owned = try self.allocator.dupe(u8, name);
+        const gop = try self.gauges.getOrPut(name_owned);
         if (gop.found_existing) {
-            self.allocator.free(key);
+            // Key already in map — discard duplicate we just allocated.
+            self.allocator.free(name_owned);
         } else {
-            gop.key_ptr.* = key;
+            gop.key_ptr.* = name_owned;
         }
         gop.value_ptr.* = val;
-        try self.gauges.put(try self.allocator.dupe(u8, name), val);
     }
 
     fn record(self: *Metrics, name: []const u8, delta: f64, tags_json: []const u8) !void {
+        // Totals are keyed by metric name + tags so the same metric can fan out.
         const key = try self.makeKey(name, tags_json);
         const gop = try self.totals.getOrPut(key);
         if (gop.found_existing) {
@@ -83,6 +87,7 @@ pub const Metrics = struct {
         return std.fmt.allocPrint(self.allocator, "{s}|{s}", .{ name, tags_json });
     }
 
+    /// Sum all counter buckets that share the same metric name (any tags).
     pub fn value(self: *const Metrics, name: []const u8) f64 {
         var total: f64 = 0;
         var it = self.totals.iterator();

@@ -5,6 +5,7 @@ pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const io = init.io;
 
+    // Route subcommands before falling through to the full runtime demo.
     const args = try init.minimal.args.toSlice(gpa);
     defer gpa.free(args);
 
@@ -22,11 +23,13 @@ pub fn main(init: std.process.Init) !void {
     try runDemo(gpa, io);
 }
 
+/// Wire global metrics handle for cross-module instrumentation during a command.
 fn initMetrics(gpa: std.mem.Allocator, command: []const u8, out: *tars.metrics.Metrics) !void {
     out.* = try tars.metrics.Metrics.init(gpa, command, "tars");
     tars.metrics.setGlobal(out);
 }
 
+/// Persist in-memory counters, print report, then tear down the global handle.
 fn finishMetrics(gpa: std.mem.Allocator, io: std.Io, store: *tars.memory.store.Store, m: *tars.metrics.Metrics, w: *std.Io.Writer, json: bool) !void {
     try tars.metrics.persist.flush(m, store, io);
     const db = try tars.metrics.report.loadDbTotals(store, io, gpa);
@@ -42,6 +45,7 @@ fn finishMetrics(gpa: std.mem.Allocator, io: std.Io, store: *tars.memory.store.S
     m.deinit();
 }
 
+/// Read-only metrics query against SQLite (no live instrumentation).
 fn runReport(gpa: std.mem.Allocator, io: std.Io, json: bool) !void {
     var store = try tars.memory.store.Store.init(gpa, ".tars/tars.db");
     defer store.deinit();
@@ -67,6 +71,7 @@ fn runReport(gpa: std.mem.Allocator, io: std.Io, json: bool) !void {
     try w.flush();
 }
 
+/// End-to-end showcase of streaming, perception, recall, session, loop, and metrics.
 fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
     const db_path = ".tars/tars.db";
     var store = try tars.memory.store.Store.init(gpa, db_path);
@@ -119,13 +124,7 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
     try tars.core.mission.writeEpisodeFromOutcome(gpa, &store, io, mission_id, "monitor", "Verify phase checks executor output and publishes handoff", &.{ "verify" });
 
     const hits = try tars.memory.recall.recall(gpa, &store, io, "verify handoff monitor", 2);
-    defer {
-        for (hits) |h| {
-            gpa.free(h.content);
-            gpa.free(h.meta_json);
-        }
-        gpa.free(hits);
-    }
+    defer if (hits.len > 0) tars.memory.recall.freeHitsSlice(gpa, hits);
     for (hits) |h| try w.print("  recall score={d:.3}: {s}\n", .{ h.score, h.content[0..@min(h.content.len, 60)] });
     try w.print("\n", .{});
 
@@ -190,6 +189,7 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
     try finishMetrics(gpa, io, &store, &metrics_state, w, false);
 }
 
+/// Interactive REPL with recall-augmented streaming responses.
 fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
     const db_path = ".tars/tars.db";
     var store = try tars.memory.store.Store.init(gpa, db_path);
@@ -231,15 +231,7 @@ fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
             error.SqliteFailed => &[_]tars.memory.recall.Hit{},
             else => |e| return e,
         };
-        defer {
-            if (hits.len > 0) {
-                for (hits) |hit| {
-                    gpa.free(hit.content);
-                    gpa.free(hit.meta_json);
-                }
-                gpa.free(hits);
-            }
-        }
+        defer if (hits.len > 0) tars.memory.recall.freeHitsSlice(gpa, hits);
 
         const req = tars.llm.CompletionRequest{
             .config = .{},

@@ -6,6 +6,7 @@ const registry = @import("registry.zig");
 const store_mod = @import("../memory/store.zig");
 
 pub fn flush(m: *const collector.Metrics, st: *const store_mod.Store, io: std.Io) !void {
+    // Write one metric_runs row then fan out all in-memory counter buckets.
     const finished_at: i64 = 0;
     try st.beginMetricRun(io, m.run_id, m.command, m.started_at, m.meta_json);
 

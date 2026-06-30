@@ -33,6 +33,7 @@ pub const Monitor = struct {
         var checks: std.ArrayList(verify_mod.block.VerifyCheck) = .empty;
         errdefer freeChecks(allocator, &checks);
 
+        // Fail fast if any executor step reported a non-zero exit.
         for (action_results) |r| {
             if (!r.success) {
                 _ = self.watchdog.recordFailure();
@@ -55,6 +56,7 @@ pub const Monitor = struct {
             }
         }
 
+        // Run optional shell checks (e.g. test -f build.zig) after actions succeed.
         for (verify_commands) |cmd| {
             metrics.gInc("monitor.verify.checks", 1);
             const check = try verifier.run(allocator, self.io, cmd);
@@ -77,10 +79,12 @@ pub const Monitor = struct {
                 };
 
                 try self.publishLoopBack(mission_id, &loop, now);
+                freeChecks(allocator, &checks);
                 return .{ .fail = loop };
             }
         }
 
+        // All checks passed — build handoff summary for operator and audit log.
         self.watchdog.recordSuccess();
         metrics.gInc("monitor.verify.pass", 1);
 
@@ -128,6 +132,7 @@ pub const Monitor = struct {
         return .{ .pass = handoff };
     }
 
+    /// Notify analyst to re-enter the mission loop at the target phase.
     fn publishLoopBack(self: *Monitor, mission_id: []const u8, loop: *const types.LoopBack, now: i64) !void {
         try self.store.publishBusEvent(
             self.io,

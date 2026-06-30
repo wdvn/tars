@@ -6,6 +6,7 @@ const std = @import("std");
 pub const dimension: u32 = 384;
 
 pub fn embed(allocator: std.mem.Allocator, text: []const u8) ![]f32 {
+    // Hash tokens into a sparse bag-of-words vector, then L2-normalize.
     var vec = try allocator.alloc(f32, dimension);
     @memset(vec, 0);
 
@@ -25,6 +26,7 @@ pub fn embed(allocator: std.mem.Allocator, text: []const u8) ![]f32 {
 }
 
 pub fn cosineSimilarity(a: []const f32, b: []const f32) f32 {
+    // Dot product divided by product of L2 norms (0 when either vector is zero).
     const n = @min(a.len, b.len);
     var dot: f32 = 0;
     var na: f32 = 0;
@@ -53,6 +55,7 @@ pub fn serializeJson(allocator: std.mem.Allocator, vec: []const f32) ![]const u8
 }
 
 pub fn parseJson(allocator: std.mem.Allocator, json: []const u8) ![]f32 {
+    // Minimal parser for episode meta embedding arrays stored in SQLite.
     var vec: std.ArrayList(f32) = .empty;
     errdefer vec.deinit(allocator);
 
@@ -74,6 +77,7 @@ pub fn parseJson(allocator: std.mem.Allocator, json: []const u8) ![]f32 {
 }
 
 fn normalize(vec: []f32) void {
+    // Scale vector so sum of squares equals 1 (no-op for zero vectors).
     var sum: f32 = 0;
     for (vec) |v| sum += v * v;
     if (sum == 0) return;

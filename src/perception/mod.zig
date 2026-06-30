@@ -51,6 +51,7 @@ pub fn gatherEvidence(
 }
 
 fn jsonString(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    // Escape control chars so file previews embed safely in JSON evidence.
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     try out.append(allocator, '"');

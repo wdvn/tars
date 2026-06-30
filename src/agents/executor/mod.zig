@@ -36,6 +36,7 @@ pub const Executor = struct {
             const act = types.Action{ .kind = step.kind, .payload = step.payload };
             metrics.gInc("executor.actions.total", 1);
 
+            // Safety Guard may deny before any side-effecting action runs.
             switch (policy.safety_guard.Guard.evaluate(act)) {
                 .deny => |d| {
                     metrics.gInc("executor.actions.denied", 1);

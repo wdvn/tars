@@ -16,6 +16,7 @@ pub fn readRelative(
     rel_path: []const u8,
     max_bytes: usize,
 ) ReadError![]const u8 {
+    // Reject path traversal before spawning a shell.
     if (std.mem.indexOf(u8, rel_path, "..") != null) return ReadError.PathEscape;
 
     const cmd = try std.fmt.allocPrint(allocator, "head -c {d} '{s}/{s}' 2>/dev/null", .{ max_bytes, root, rel_path });
@@ -47,6 +48,7 @@ pub fn listGlob(
     root: []const u8,
     pattern: []const u8,
 ) ReadError![]const []const u8 {
+    // Cap at 50 paths to keep perception payloads bounded.
     const cmd = try std.fmt.allocPrint(allocator, "cd '{s}' && find . -path './{s}' -type f 2>/dev/null | head -50", .{ root, pattern });
     defer allocator.free(cmd);
 

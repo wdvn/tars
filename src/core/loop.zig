@@ -27,6 +27,7 @@ pub const LoopResult = struct {
     last_verify: ?types.VerifyOutcome,
 };
 
+/// Drive mission phases until verify passes, fails with loop-back, or max iterations.
 pub fn runAutonomous(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -45,11 +46,15 @@ pub fn runAutonomous(
     var last_verify: ?types.VerifyOutcome = null;
     var status = ctx.status;
 
+    // Evidence built inside ORIENT is owned here so later phases can read it.
+    var loop_evidence: ?[]u8 = null;
+    defer if (loop_evidence) |e| allocator.free(e);
+
     while (iteration < cfg.max_iterations) : (iteration += 1) {
         metrics.gInc("mission.phase.entered", 1);
         try sink.emit(io, .{ .kind = .phase, .text = ctx.phase.name() });
 
-        // ORIENT: perception + semantic recall → evidence
+        // ORIENT: merge filesystem perception with semantic recall into JSON evidence.
         if (ctx.phase == .orient) {
             const evidence = try perception.gatherEvidence(allocator, io, cfg.repo_root, cfg.perception_paths);
             defer allocator.free(evidence);
@@ -58,15 +63,7 @@ pub fn runAutonomous(
                 error.SqliteFailed => &[_]recall_mod.Hit{},
                 else => |e| return e,
             };
-            defer {
-                if (hits.len > 0) {
-                    for (hits) |hit| {
-                        allocator.free(hit.content);
-                        allocator.free(hit.meta_json);
-                    }
-                    allocator.free(hits);
-                }
-            }
+            defer if (hits.len > 0) recall_mod.freeHitsSlice(allocator, hits);
 
             var ev_buf: std.ArrayList(u8) = .empty;
             defer ev_buf.deinit(allocator);
@@ -75,23 +72,30 @@ pub fn runAutonomous(
                 try ev_buf.appendSlice(allocator, ",\"recall\":[");
                 for (hits, 0..) |h, i| {
                     if (i > 0) try ev_buf.appendSlice(allocator, ",");
+                    const quoted = try jsonQuote(allocator, h.content);
+                    defer allocator.free(quoted);
                     const item = try std.fmt.allocPrint(allocator, "{{\"score\":{d:.3},\"content\":{s}}}", .{
-                        h.score, try jsonQuote(allocator, h.content),
+                        h.score, quoted,
                     });
                     defer allocator.free(item);
                     try ev_buf.appendSlice(allocator, item);
                 }
                 try ev_buf.appendSlice(allocator, "]");
             }
-            ctx.evidence = try ev_buf.toOwnedSlice(allocator);
-            defer allocator.free(ctx.evidence);
+
+            // Replace prior loop-owned evidence; caller's original slice is unchanged.
+            if (loop_evidence) |prev| allocator.free(prev);
+            loop_evidence = try ev_buf.toOwnedSlice(allocator);
+            ctx.evidence = loop_evidence.?;
         }
 
+        // Analyst runs reasoning blocks for orient / assess / plan.
         if (ctx.phase == .orient or ctx.phase == .assess or ctx.phase == .plan) {
             const results = try analyst_agent.runPhase(allocator, ctx);
             defer freeBlockResults(allocator, results);
         }
 
+        // ACT → VERIFY: execute plan steps then run monitor checks.
         if (ctx.phase == .act) {
             const outcome = try exec.execute(allocator, plan);
             defer freeExecuteOutcome(allocator, outcome);
@@ -134,6 +138,7 @@ pub fn runAutonomous(
             }
         }
 
+        // Advance to the next phase in the OODA cycle.
         ctx.phase = nextPhase(ctx.phase);
         ctx.status = switch (ctx.phase) {
             .orient => .orient,
@@ -149,6 +154,7 @@ pub fn runAutonomous(
     return .{ .iterations = iteration, .final_status = status, .last_verify = last_verify };
 }
 
+/// Single step forward in ORIENT → ASSESS → PLAN → ACT → VERIFY → ORIENT.
 fn nextPhase(phase: types.Phase) types.Phase {
     return switch (phase) {
         .orient => .assess,
@@ -159,6 +165,7 @@ fn nextPhase(phase: types.Phase) types.Phase {
     };
 }
 
+/// Escape a string for embedding inside JSON.
 fn jsonQuote(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);

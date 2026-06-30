@@ -15,6 +15,7 @@ pub const Session = struct {
         io: std.Io,
         label: []const u8,
     ) !Session {
+        // Deterministic id from label hash; row is INSERT OR IGNORE in store.
         const id = try std.fmt.allocPrint(allocator, "sess-{s}-{d}", .{ label, hashLabel(label) });
         const now: i64 = 0;
         try store.createSession(io, id, now);
@@ -34,6 +35,7 @@ pub const Session = struct {
     }
 
     pub fn appendTurn(self: *const Session, role: []const u8, content: []const u8) !void {
+        // Persist turn and bump session/operator vs agent counters.
         const now: i64 = 0;
         try self.store.appendSessionTurn(self.io, self.id, role, content, now);
         metrics.gInc("session.turns.total", 1);

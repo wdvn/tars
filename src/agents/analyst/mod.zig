@@ -21,6 +21,7 @@ pub const Analyst = struct {
         allocator: std.mem.Allocator,
         ctx: *const types.MissionContext,
     ) ![]types.BlockResult {
+        // Invoke every reasoning block registered for the current mission phase.
         const registry = reasoning.allBlocks();
         var results: std.ArrayList(types.BlockResult) = .empty;
         errdefer {
@@ -49,6 +50,7 @@ pub const Analyst = struct {
         }
 
         if (ctx.phase == .plan and results.items.len > 0) {
+            // Signal executor that an approved plan payload is ready on the bus.
             try self.store.publishBusEvent(
                 self.io,
                 ctx.mission_id,
