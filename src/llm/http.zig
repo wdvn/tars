@@ -152,9 +152,10 @@ pub fn postStream(
             if (trimmed.len > 0 and !std.mem.startsWith(u8, trimmed, "---TARS_HTTP:")) {
                 onChunk(ctx, trimmed) catch return HttpError.CurlFailed;
             }
-            const rest = line_carry.items[nl + 1 ..];
+            const tail = try allocator.dupe(u8, line_carry.items[nl + 1 ..]);
             line_carry.clearRetainingCapacity();
-            try line_carry.appendSlice(allocator, rest);
+            try line_carry.appendSlice(allocator, tail);
+            allocator.free(tail);
         }
     }
 

@@ -1,8 +1,9 @@
 //! OpenAI-compatible chat completions provider.
-//! Works with OpenAI, Azure OpenAI, Ollama, vLLM, etc.
+//! Works with OpenAI, OpenRouter, Azure, Ollama (/v1), LM Studio, vLLM, etc.
 
 const std = @import("std");
 const llm = @import("mod.zig");
+const config = @import("config.zig");
 const http = @import("http.zig");
 const json_util = @import("json_util.zig");
 const env = @import("env.zig");
@@ -15,38 +16,62 @@ pub const LlmError = error{
     OutOfMemory,
 } || http.HttpError;
 
+pub const BackendTag = enum {
+    openai,
+    ollama,
+};
+
 pub const OpenAiProvider = struct {
     api_key: []const u8,
     base_url: []const u8,
+    api_header: []const u8,
     default_model: []const u8,
+    default_max_tokens: u32,
+    tag: BackendTag,
     io: std.Io,
     allocator: std.mem.Allocator,
 
-    /// Load API key, base URL, and default model from env; trim trailing slash on base.
+    /// Load from OPENAI_COMPAT_* / OPENAI_* env (after dotenv).
     pub fn create(allocator: std.mem.Allocator, io: std.Io) LlmError!OpenAiProvider {
-        const api_key = try env.get(allocator, io, "OPENAI_API_KEY") orelse return LlmError.MissingApiKey;
-        const base_raw = try env.getOr(allocator, io, "OPENAI_BASE_URL", "https://api.openai.com/v1");
-        const base_url = try env.trimSlash(allocator, base_raw);
-        if (!std.mem.eql(u8, base_raw, base_url)) allocator.free(base_raw);
-        const default_model = try env.getOr(allocator, io, "OPENAI_MODEL", "gpt-4o-mini");
+        const compat = config.loadOpenAiCompat(allocator, io) catch return LlmError.OutOfMemory;
+        const c = compat orelse return LlmError.MissingApiKey;
+        return createFromCompat(allocator, io, c, .openai);
+    }
+
+    /// Ollama local server via OpenAI-compatible API.
+    pub fn createOllama(allocator: std.mem.Allocator, io: std.Io) LlmError!OpenAiProvider {
+        const compat = config.loadOllamaCompat(allocator, io) catch return LlmError.OutOfMemory;
+        return createFromCompat(allocator, io, compat, .ollama);
+    }
+
+    pub fn createFromCompat(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        compat: config.OpenAiCompat,
+        tag: BackendTag,
+    ) LlmError!OpenAiProvider {
+        var runtime = config.Config.load(allocator, io) catch config.Config{};
+        defer runtime.deinit(allocator);
 
         return .{
-            .api_key = api_key,
-            .base_url = base_url,
-            .default_model = default_model,
+            .api_key = compat.api_key,
+            .base_url = compat.base_url,
+            .api_header = compat.api_header,
+            .default_model = compat.model,
+            .default_max_tokens = runtime.max_tokens,
+            .tag = tag,
             .io = io,
             .allocator = allocator,
         };
     }
 
-    /// Release heap-owned credential and endpoint strings.
     pub fn deinit(self: *OpenAiProvider) void {
         self.allocator.free(self.api_key);
         self.allocator.free(self.base_url);
+        self.allocator.free(self.api_header);
         self.allocator.free(self.default_model);
     }
 
-    /// Expose this struct through the generic llm.Provider vtable.
     pub fn provider(self: *OpenAiProvider) llm.Provider {
         return .{
             .ptr = @ptrCast(self),
@@ -55,17 +80,22 @@ pub const OpenAiProvider = struct {
         };
     }
 
-    /// OpenAI-compatible chat/completions URL under configurable base.
     fn endpoint(self: *const OpenAiProvider, allocator: std.mem.Allocator) ![]const u8 {
-        return std.fmt.allocPrint(allocator, "{s}/chat/completions", .{self.base_url});
+        if (std.mem.endsWith(u8, self.base_url, "/chat/completions")) {
+            return allocator.dupe(u8, self.base_url);
+        }
+        const sep = if (std.mem.endsWith(u8, self.base_url, "/")) "" else "/";
+        return std.fmt.allocPrint(allocator, "{s}{s}chat/completions", .{ self.base_url, sep });
     }
 
-    /// Standard Bearer header for OpenAI and compatible proxies.
-    fn authHeader(self: *const OpenAiProvider, allocator: std.mem.Allocator) ![]const u8 {
-        return std.fmt.allocPrint(allocator, "Bearer {s}", .{self.api_key});
+    fn authValue(self: *const OpenAiProvider, allocator: std.mem.Allocator) ![]const u8 {
+        const key = if (self.api_key.len > 0) self.api_key else "ollama";
+        if (std.mem.eql(u8, self.api_header, "Authorization")) {
+            return std.fmt.allocPrint(allocator, "Bearer {s}", .{key});
+        }
+        return allocator.dupe(u8, key);
     }
 
-    /// Hand-build JSON body: system first, then messages; enable json_object when schema set.
     fn buildBody(
         self: *const OpenAiProvider,
         allocator: std.mem.Allocator,
@@ -76,6 +106,8 @@ pub const OpenAiProvider = struct {
             request.config.model
         else
             self.default_model;
+
+        const max_tokens = if (request.config.max_tokens > 0) request.config.max_tokens else self.default_max_tokens;
 
         var messages: std.ArrayList(u8) = .empty;
         errdefer messages.deinit(allocator);
@@ -109,7 +141,7 @@ pub const OpenAiProvider = struct {
         , .{
             model,
             request.config.temperature,
-            request.config.max_tokens,
+            max_tokens,
             if (stream) "true" else "false",
             messages.items,
             if (json_mode) ",\"response_format\":{\"type\":\"json_object\"}" else "",
@@ -118,7 +150,6 @@ pub const OpenAiProvider = struct {
         return body;
     }
 
-    /// POST chat/completions, parse first choice content and token usage from response.
     fn complete(
         ptr: *anyopaque,
         allocator: std.mem.Allocator,
@@ -130,12 +161,14 @@ pub const OpenAiProvider = struct {
         defer allocator.free(url);
         const payload = try self.buildBody(allocator, request, false);
         defer allocator.free(payload);
-        const auth = try self.authHeader(allocator);
+
+        const auth = try self.authValue(allocator);
         defer allocator.free(auth);
+        const auth_name = if (std.mem.eql(u8, self.api_header, "Authorization")) "Authorization" else self.api_header;
 
         const resp = try http.post(allocator, self.io, url, &.{
             .{ .name = "Content-Type", .value = "application/json" },
-            .{ .name = "Authorization", .value = auth },
+            .{ .name = auth_name, .value = auth },
         }, payload);
 
         if (resp.status < 200 or resp.status >= 300) {
@@ -153,7 +186,6 @@ pub const OpenAiProvider = struct {
         };
     }
 
-    /// Stream SSE lines, accumulate tokens, and mirror each chunk to the operator sink.
     fn streamComplete(
         ptr: *anyopaque,
         allocator: std.mem.Allocator,
@@ -166,8 +198,10 @@ pub const OpenAiProvider = struct {
         defer allocator.free(url);
         const payload = try self.buildBody(allocator, request, true);
         defer allocator.free(payload);
-        const auth = try self.authHeader(allocator);
+
+        const auth = try self.authValue(allocator);
         defer allocator.free(auth);
+        const auth_name = if (std.mem.eql(u8, self.api_header, "Authorization")) "Authorization" else self.api_header;
 
         var acc: std.ArrayList(u8) = .empty;
         errdefer acc.deinit(allocator);
@@ -175,7 +209,7 @@ pub const OpenAiProvider = struct {
         var ctx = StreamCtx{ .allocator = allocator, .io = io, .sink = sink, .acc = &acc };
         const resp = try http.postStream(allocator, io, url, &.{
             .{ .name = "Content-Type", .value = "application/json" },
-            .{ .name = "Authorization", .value = auth },
+            .{ .name = auth_name, .value = auth },
         }, payload, @ptrCast(&ctx), onOpenAiLine);
         defer allocator.free(resp.body);
 
@@ -205,18 +239,20 @@ const StreamCtx = struct {
     acc: *std.ArrayList(u8),
 };
 
-/// Parse one OpenAI SSE data line; skip [DONE] and non-data prefixes.
+/// Parse OpenAI SSE `data:` line — supports choices[].delta.content streaming.
 fn onOpenAiLine(ctx_ptr: *anyopaque, line: []const u8) !void {
     const ctx: *StreamCtx = @ptrCast(@alignCast(ctx_ptr));
     if (!std.mem.startsWith(u8, line, "data: ")) return;
     const data = line["data: ".len..];
     if (std.mem.eql(u8, data, "[DONE]")) return;
 
-    if (json_util.extractJsonStringField(ctx.allocator, data, "content")) |token| {
+    if (json_util.openAiStreamDelta(ctx.allocator, data)) |token| {
         defer ctx.allocator.free(token);
         if (token.len > 0) {
-            try ctx.acc.appendSlice(ctx.allocator, token);
-            try ctx.sink.emit(ctx.io, .{ .kind = .token, .text = token });
+            const piece = try ctx.allocator.dupe(u8, token);
+            try ctx.acc.appendSlice(ctx.allocator, piece);
+            try ctx.sink.emit(ctx.io, .{ .kind = .token, .text = piece });
+            ctx.allocator.free(piece);
         }
     } else |_| {}
 }

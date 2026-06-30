@@ -126,6 +126,15 @@ pub fn unescapeJsonString(allocator: std.mem.Allocator, raw: []const u8) ![]cons
     return out.toOwnedSlice(allocator);
 }
 
+/// Extract streaming token from OpenAI chunk JSON (choices[0].delta.content).
+pub fn openAiStreamDelta(allocator: std.mem.Allocator, json: []const u8) ![]const u8 {
+    if (extractJsonStringField(allocator, json, "content")) |token| {
+        return token;
+    } else |_| {
+        return extractJsonStringField(allocator, json, "reasoning_content") catch return error.FieldNotFound;
+    }
+}
+
 /// Lightweight string-field extractor for streaming SSE JSON fragments (no full parse).
 pub fn extractJsonStringField(allocator: std.mem.Allocator, json: []const u8, field: []const u8) ![]const u8 {
     const needle = try std.fmt.allocPrint(allocator, "\"{s}\":\"", .{field});

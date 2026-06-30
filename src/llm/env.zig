@@ -2,8 +2,31 @@
 
 const std = @import("std");
 
+var dotenv_state: ?@import("dotenv.zig").DotEnv = null;
+
+/// Load .env files before resolving LLM backends (idempotent).
+pub fn initDotEnv(allocator: std.mem.Allocator, io: std.Io) !void {
+    if (dotenv_state != null) return;
+    dotenv_state = try @import("dotenv.zig").DotEnv.load(allocator, io);
+}
+
+pub fn deinitDotEnv() void {
+    if (dotenv_state) |*d| {
+        d.deinit();
+        dotenv_state = null;
+    }
+}
+
 /// Read one env var via printenv; returns owned stdout or null if unset/missing.
 pub fn get(allocator: std.mem.Allocator, io: std.Io, name: []const u8) !?[]const u8 {
+    if (try getFromShell(allocator, io, name)) |value| return value;
+    if (dotenv_state) |*d| {
+        if (d.get(name)) |val| return try allocator.dupe(u8, val);
+    }
+    return null;
+}
+
+fn getFromShell(allocator: std.mem.Allocator, io: std.Io, name: []const u8) !?[]const u8 {
     const script = try std.fmt.allocPrint(allocator, "printenv {s}", .{name});
     defer allocator.free(script);
 
@@ -28,6 +51,14 @@ pub fn get(allocator: std.mem.Allocator, io: std.Io, name: []const u8) !?[]const
         return null;
     }
     return result.stdout;
+}
+
+/// First non-null env among candidates (mini-style aliases).
+pub fn getFirst(allocator: std.mem.Allocator, io: std.Io, names: []const []const u8) !?[]const u8 {
+    for (names) |name| {
+        if (try get(allocator, io, name)) |value| return value;
+    }
+    return null;
 }
 
 /// Return env value or duplicate default when variable is absent.

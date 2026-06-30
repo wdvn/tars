@@ -1,10 +1,10 @@
-//! Anthropic Messages API provider.
+//! Anthropic Messages API provider (Claude) — mini-compatible SSE streaming.
 
 const std = @import("std");
 const llm = @import("mod.zig");
+const config = @import("config.zig");
 const http = @import("http.zig");
 const json_util = @import("json_util.zig");
-const env = @import("env.zig");
 const stream_mod = @import("../stream/mod.zig");
 
 pub const LlmError = error{
@@ -18,34 +18,32 @@ pub const AnthropicProvider = struct {
     api_key: []const u8,
     base_url: []const u8,
     default_model: []const u8,
+    default_max_tokens: u32,
     io: std.Io,
     allocator: std.mem.Allocator,
 
-    /// Load Anthropic credentials and model defaults from env.
     pub fn create(allocator: std.mem.Allocator, io: std.Io) LlmError!AnthropicProvider {
-        const api_key = try env.get(allocator, io, "ANTHROPIC_API_KEY") orelse return LlmError.MissingApiKey;
-        const base_raw = try env.getOr(allocator, io, "ANTHROPIC_BASE_URL", "https://api.anthropic.com");
-        const base_url = try env.trimSlash(allocator, base_raw);
-        if (!std.mem.eql(u8, base_raw, base_url)) allocator.free(base_raw);
-        const default_model = try env.getOr(allocator, io, "ANTHROPIC_MODEL", "claude-sonnet-4-20250514");
+        const settings = config.loadAnthropic(allocator, io) catch return LlmError.OutOfMemory;
+        const s = settings orelse return LlmError.MissingApiKey;
+        var runtime = config.Config.load(allocator, io) catch config.Config{};
+        defer runtime.deinit(allocator);
 
         return .{
-            .api_key = api_key,
-            .base_url = base_url,
-            .default_model = default_model,
+            .api_key = s.api_key,
+            .base_url = s.base_url,
+            .default_model = s.model,
+            .default_max_tokens = runtime.max_tokens,
             .io = io,
             .allocator = allocator,
         };
     }
 
-    /// Free owned API key, base URL, and model strings.
     pub fn deinit(self: *AnthropicProvider) void {
         self.allocator.free(self.api_key);
         self.allocator.free(self.base_url);
         self.allocator.free(self.default_model);
     }
 
-    /// Wrap this provider in the generic llm.Provider vtable.
     pub fn provider(self: *AnthropicProvider) llm.Provider {
         return .{
             .ptr = @ptrCast(self),
@@ -54,12 +52,14 @@ pub const AnthropicProvider = struct {
         };
     }
 
-    /// Anthropic Messages API endpoint under configurable base URL.
     fn endpoint(self: *const AnthropicProvider, allocator: std.mem.Allocator) ![]const u8 {
-        return std.fmt.allocPrint(allocator, "{s}/v1/messages", .{self.base_url});
+        if (std.mem.endsWith(u8, self.base_url, "/v1/messages")) {
+            return allocator.dupe(u8, self.base_url);
+        }
+        const sep = if (std.mem.endsWith(u8, self.base_url, "/")) "" else "/";
+        return std.fmt.allocPrint(allocator, "{s}{s}v1/messages", .{ self.base_url, sep });
     }
 
-    /// Build Messages API JSON: system is top-level; roles mapped to user/assistant only.
     fn buildBody(
         self: *const AnthropicProvider,
         allocator: std.mem.Allocator,
@@ -70,6 +70,8 @@ pub const AnthropicProvider = struct {
             request.config.model
         else
             self.default_model;
+
+        const max_tokens = if (request.config.max_tokens > 0) request.config.max_tokens else self.default_max_tokens;
 
         var messages: std.ArrayList(u8) = .empty;
         errdefer messages.deinit(allocator);
@@ -99,14 +101,13 @@ pub const AnthropicProvider = struct {
             \\{{"model":"{s}","max_tokens":{d},"stream":{s}{s},"messages":{s}}}
         , .{
             model,
-            request.config.max_tokens,
+            max_tokens,
             if (stream) "true" else "false",
             system,
             messages.items,
         });
     }
 
-    /// Non-stream POST; extract text block from content[0].text.
     fn complete(
         ptr: *anyopaque,
         allocator: std.mem.Allocator,
@@ -140,7 +141,6 @@ pub const AnthropicProvider = struct {
         };
     }
 
-    /// Stream SSE deltas; accumulate text and forward tokens to sink.
     fn streamComplete(
         ptr: *anyopaque,
         allocator: std.mem.Allocator,
@@ -157,7 +157,12 @@ pub const AnthropicProvider = struct {
         var acc: std.ArrayList(u8) = .empty;
         errdefer acc.deinit(allocator);
 
-        var ctx = StreamCtx{ .allocator = allocator, .io = io, .sink = sink, .acc = &acc };
+        var ctx = StreamCtx{
+            .allocator = allocator,
+            .io = io,
+            .sink = sink,
+            .acc = &acc,
+        };
         const resp = try http.postStream(allocator, io, url, &.{
             .{ .name = "Content-Type", .value = "application/json" },
             .{ .name = "x-api-key", .value = self.api_key },
@@ -184,7 +189,6 @@ pub const AnthropicProvider = struct {
     }
 };
 
-/// Anthropic only accepts user/assistant — map anything else to user.
 fn mapRole(role: []const u8) []const u8 {
     if (std.mem.eql(u8, role, "assistant")) return "assistant";
     return "user";
@@ -195,19 +199,47 @@ const StreamCtx = struct {
     io: std.Io,
     sink: stream_mod.Sink,
     acc: *std.ArrayList(u8),
+    event_type: [64]u8 = undefined,
+    event_type_len: usize = 0,
 };
 
-/// Parse Anthropic SSE data line and extract incremental text field.
+/// Anthropic SSE: `event:` line then `data:` JSON (content_block_delta, etc.).
 fn onAnthropicLine(ctx_ptr: *anyopaque, line: []const u8) !void {
     const ctx: *StreamCtx = @ptrCast(@alignCast(ctx_ptr));
-    if (!std.mem.startsWith(u8, line, "data: ")) return;
-    const data = line["data: ".len..];
+    const trimmed = std.mem.trim(u8, line, " \r");
+
+    if (std.mem.startsWith(u8, trimmed, "event: ")) {
+        const ev = trimmed["event: ".len..];
+        const n = @min(ev.len, ctx.event_type.len);
+        @memcpy(ctx.event_type[0..n], ev[0..n]);
+        ctx.event_type_len = n;
+        return;
+    }
+
+    if (!std.mem.startsWith(u8, trimmed, "data: ")) return;
+    const data = trimmed["data: ".len..];
+    const ev = ctx.event_type[0..ctx.event_type_len];
+
+    if (std.mem.eql(u8, ev, "content_block_delta")) {
+        if (json_util.extractJsonStringField(ctx.allocator, data, "text")) |token| {
+            defer ctx.allocator.free(token);
+            if (token.len > 0) {
+                const piece = try ctx.allocator.dupe(u8, token);
+                try ctx.acc.appendSlice(ctx.allocator, piece);
+                try ctx.sink.emit(ctx.io, .{ .kind = .token, .text = piece });
+                ctx.allocator.free(piece);
+            }
+        } else |_| {}
+        return;
+    }
 
     if (json_util.extractJsonStringField(ctx.allocator, data, "text")) |token| {
         defer ctx.allocator.free(token);
         if (token.len > 0) {
-            try ctx.acc.appendSlice(ctx.allocator, token);
-            try ctx.sink.emit(ctx.io, .{ .kind = .token, .text = token });
+            const piece = try ctx.allocator.dupe(u8, token);
+            try ctx.acc.appendSlice(ctx.allocator, piece);
+            try ctx.sink.emit(ctx.io, .{ .kind = .token, .text = piece });
+            ctx.allocator.free(piece);
         }
     } else |_| {}
 }

@@ -1,15 +1,16 @@
-//! LLM provider interface — OpenAI-compatible, Anthropic, stub.
+//! LLM provider interface — OpenAI-compatible, Anthropic, Ollama, stub.
 
 const std = @import("std");
 
 pub const openai = @import("openai.zig");
 pub const anthropic = @import("anthropic.zig");
 pub const env = @import("env.zig");
+pub const config = @import("config.zig");
 
 pub const Config = struct {
     model: []const u8 = "default",
     temperature: f32 = 0.2,
-    max_tokens: u32 = 4096,
+    max_tokens: u32 = 0,
 };
 
 pub const Message = struct {
@@ -21,7 +22,6 @@ pub const CompletionRequest = struct {
     config: Config,
     system: []const u8,
     messages: []const Message,
-    /// Expected JSON schema description (honesty / structured output)
     output_schema: []const u8,
 };
 
@@ -34,6 +34,7 @@ pub const ProviderKind = enum {
     stub,
     openai,
     anthropic,
+    ollama,
 };
 
 pub const Provider = struct {
@@ -51,7 +52,6 @@ pub const Provider = struct {
         sink: @import("../stream/mod.zig").Sink,
     ) anyerror!CompletionResponse = null,
 
-    /// Dispatch non-stream completion to the vtable-backed provider implementation.
     pub fn complete(
         self: Provider,
         allocator: std.mem.Allocator,
@@ -60,7 +60,6 @@ pub const Provider = struct {
         return self.completeFn(self.ptr, allocator, request);
     }
 
-    /// Prefer native streaming; fall back to one-shot complete + single token emit.
     pub fn completeStream(
         self: Provider,
         allocator: std.mem.Allocator,
@@ -77,78 +76,106 @@ pub const Provider = struct {
     }
 };
 
-/// Heap-owned provider selected from env (TARS_LLM_PROVIDER, API keys).
+/// Heap-owned provider — mini-agent resolution order after dotenv load.
 pub const Resolved = union(enum) {
     stub: void,
     openai: openai.OpenAiProvider,
+    ollama: openai.OpenAiProvider,
     anthropic: anthropic.AnthropicProvider,
 
-    /// Free provider-owned env strings (API keys, base URLs, models).
     pub fn deinit(self: *Resolved) void {
         switch (self.*) {
             .stub => {},
             .openai => |*p| p.deinit(),
+            .ollama => |*p| p.deinit(),
             .anthropic => |*p| p.deinit(),
         }
     }
 
-    /// Return a vtable Provider view over the resolved union variant.
     pub fn provider(self: *Resolved) Provider {
         return switch (self.*) {
             .stub => StubProvider.init(),
             .openai => |*p| p.provider(),
+            .ollama => |*p| p.provider(),
             .anthropic => |*p| p.provider(),
         };
     }
 
-    /// Which backend was selected — used for metrics tags and logging.
     pub fn kind(self: *const Resolved) ProviderKind {
         return switch (self.*) {
             .stub => .stub,
             .openai => .openai,
+            .ollama => .ollama,
             .anthropic => .anthropic,
         };
     }
 
-    /// Human-readable provider tag (stub | openai | anthropic).
     pub fn kindName(self: *const Resolved) []const u8 {
         return @tagName(self.kind());
     }
 };
 
-/// Resolve provider:
-/// - `TARS_LLM_PROVIDER=openai|anthropic|stub`
-/// - else `ANTHROPIC_API_KEY` → anthropic
-/// - else `OPENAI_API_KEY` → openai
-/// - else stub
-/// Explicit env wins over key heuristics so CI can force stub offline.
+/// Global runtime config loaded once per resolve (max_tokens, system file).
+var runtime_config: ?config.Config = null;
+
+pub fn runtimeConfig() ?*const config.Config {
+    if (runtime_config) |*c| return c;
+    return null;
+}
+
+/// Resolve backend (mini priority):
+/// 1. TARS_LLM_PROVIDER override
+/// 2. OPENAI_COMPAT_* / OPENAI_*
+/// 3. ANTHROPIC_API_KEY
+/// 4. OLLAMA_HOST fallback
+/// 5. stub
 pub fn resolve(allocator: std.mem.Allocator, io: std.Io) !Resolved {
-    if (try env.get(allocator, io, "TARS_LLM_PROVIDER")) |choice| {
-        defer allocator.free(choice);
+    try env.initDotEnv(allocator, io);
+    errdefer env.deinitDotEnv();
+
+    runtime_config = try config.Config.load(allocator, io);
+
+    if (try env.get(allocator, io, "TARS_LLM_PROVIDER")) |choice_raw| {
+        defer allocator.free(choice_raw);
+        const choice = std.mem.trim(u8, choice_raw, " \r\n");
         if (std.ascii.eqlIgnoreCase(choice, "openai")) {
             return .{ .openai = try openai.OpenAiProvider.create(allocator, io) };
         }
-        if (std.ascii.eqlIgnoreCase(choice, "anthropic")) {
+        if (std.ascii.eqlIgnoreCase(choice, "anthropic") or std.ascii.eqlIgnoreCase(choice, "claude")) {
             return .{ .anthropic = try anthropic.AnthropicProvider.create(allocator, io) };
+        }
+        if (std.ascii.eqlIgnoreCase(choice, "ollama")) {
+            return .{ .ollama = try openai.OpenAiProvider.createOllama(allocator, io) };
         }
         if (std.ascii.eqlIgnoreCase(choice, "stub")) {
             return .{ .stub = {} };
         }
     }
 
-    if (try env.isSet(allocator, io, "ANTHROPIC_API_KEY")) {
-        return .{ .anthropic = try anthropic.AnthropicProvider.create(allocator, io) };
+    if (try config.loadOpenAiCompat(allocator, io)) |compat| {
+        return .{ .openai = try openai.OpenAiProvider.createFromCompat(allocator, io, compat, .openai) };
     }
-    if (try env.isSet(allocator, io, "OPENAI_API_KEY")) {
-        return .{ .openai = try openai.OpenAiProvider.create(allocator, io) };
-    }
+
+    if (anthropic.AnthropicProvider.create(allocator, io)) |provider| {
+        return .{ .anthropic = provider };
+    } else |_| {}
+
+    if (openai.OpenAiProvider.createOllama(allocator, io)) |provider| {
+        return .{ .ollama = provider };
+    } else |_| {}
 
     return .{ .stub = {} };
 }
 
-/// Stub provider for tests and offline skeleton — returns deterministic JSON.
+pub fn deinitRuntime(allocator: std.mem.Allocator) void {
+    if (runtime_config) |*c| {
+        c.deinit(allocator);
+        runtime_config = null;
+    }
+    env.deinitDotEnv();
+}
+
 pub const StubProvider = struct {
-    /// Build a Provider vtable pointing at static stub state (no heap allocation).
     pub fn init() Provider {
         return .{
             .ptr = @ptrCast(@constCast(&stub_state)),
@@ -157,7 +184,6 @@ pub const StubProvider = struct {
         };
     }
 
-    /// Return fixed JSON so tests and offline runs never hit the network.
     fn completeStub(
         ptr: *anyopaque,
         allocator: std.mem.Allocator,
@@ -166,7 +192,7 @@ pub const StubProvider = struct {
         _ = ptr;
         _ = request;
         const json =
-            \\{"status":"stub","note":"replace with real LLM provider"}
+            \\{"status":"stub","note":"set OPENAI_COMPAT_URL, ANTHROPIC_API_KEY, or OLLAMA_HOST"}
         ;
         return .{
             .content_json = try allocator.dupe(u8, json),
@@ -174,7 +200,6 @@ pub const StubProvider = struct {
         };
     }
 
-    /// Emit stub JSON char-by-char so stream consumers exercise the same path as live LLMs.
     fn streamStub(
         ptr: *anyopaque,
         allocator: std.mem.Allocator,
@@ -185,7 +210,7 @@ pub const StubProvider = struct {
         _ = ptr;
         _ = request;
         const json =
-            \\{"status":"stub","note":"replace with real LLM provider"}
+            \\{"status":"stub","note":"set OPENAI_COMPAT_URL, ANTHROPIC_API_KEY, or OLLAMA_HOST"}
         ;
         for (json) |c| {
             var one: [1]u8 = .{c};

@@ -98,13 +98,17 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
     // Resolve provider from env (OpenAI / Anthropic / stub) and wrap with metrics.
     var llm_ctx = try tars.llm.resolve(gpa, io);
     defer llm_ctx.deinit();
+    defer tars.llm.deinitRuntime(gpa);
     const provider = tars.metrics.instrumentProvider(&metrics_state, io, llm_ctx.provider());
     try w.print("  provider: {s}\n", .{llm_ctx.kindName()});
     try w.flush();
 
+    const runtime_cfg = tars.llm.runtimeConfig();
+    const system_prompt = if (runtime_cfg) |rc| if (rc.system_prompt.len > 0) rc.system_prompt else "T.A.R.S." else "T.A.R.S.";
+
     const stream_req = tars.llm.CompletionRequest{
-        .config = .{},
-        .system = "T.A.R.S.",
+        .config = .{ .max_tokens = if (runtime_cfg) |rc| rc.max_tokens else 4096 },
+        .system = system_prompt,
         .messages = &.{.{ .role = "user", .content = "status report" }},
         .output_schema = "{}",
     };
@@ -215,8 +219,13 @@ fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
 
     var llm_ctx = try tars.llm.resolve(gpa, io);
     defer llm_ctx.deinit();
+    defer tars.llm.deinitRuntime(gpa);
     const provider = tars.metrics.instrumentProvider(&metrics_state, io, llm_ctx.provider());
     const sink = tars.stream.resolveStdout(gpa, io) catch tars.stream.StdoutSink.init();
+
+    const runtime_cfg = tars.llm.runtimeConfig();
+    const system_prompt = if (runtime_cfg) |rc| if (rc.system_prompt.len > 0) rc.system_prompt else "T.A.R.S. crew analyst" else "T.A.R.S. crew analyst";
+    const max_tokens = if (runtime_cfg) |rc| rc.max_tokens else 4096;
 
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
@@ -246,8 +255,8 @@ fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
         defer if (hits.len > 0) tars.memory.recall.freeHitsSlice(gpa, hits);
 
         const req = tars.llm.CompletionRequest{
-            .config = .{},
-            .system = "T.A.R.S. crew analyst",
+            .config = .{ .max_tokens = max_tokens },
+            .system = system_prompt,
             .messages = &.{.{ .role = "user", .content = line }},
             .output_schema = "{}",
         };
