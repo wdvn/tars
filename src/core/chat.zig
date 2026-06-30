@@ -74,7 +74,24 @@ pub fn runTurn(
         ctx.phase = phase;
         metrics.gInc("mission.phase.entered", 1);
         sink.emit(io, .{ .kind = .phase, .text = phase.name() }) catch {};
-        if (analyst.runPhase(allocator, &ctx)) |results| {
+        const start = std.Io.Clock.awake.now(io);
+        var run_err: ?anyerror = null;
+        const results = analyst.runPhase(allocator, &ctx) catch |e| blk: {
+            run_err = e;
+            break :blk @as([]types.BlockResult, &.{});
+        };
+        const elapsed = start.untilNow(io, .awake);
+        const duration_ms = @divTrunc(elapsed.toNanoseconds(), 1_000_000);
+        const duration_text = if (run_err != null)
+            std.fmt.allocPrint(allocator, " (failed in {d}ms)", .{duration_ms}) catch ""
+        else
+            std.fmt.allocPrint(allocator, " ({d}ms)", .{duration_ms}) catch "";
+        defer if (duration_text.len > 0) allocator.free(duration_text);
+        if (duration_text.len > 0) {
+            sink.emit(io, .{ .kind = .token, .text = duration_text }) catch {};
+        }
+
+        if (run_err == null) {
             defer freeBlockResults(allocator, results);
             if (phase == .plan) {
                 for (results) |r| {
@@ -84,7 +101,7 @@ pub fn runTurn(
                     }
                 }
             }
-        } else |_| {}
+        }
     }
 
     var verified = false;
@@ -92,9 +109,7 @@ pub fn runTurn(
     defer if (verified_block) |b| allocator.free(b);
 
     var owned_plan: ?plan_parse.OwnedPlan = null;
-    if (needsLiveLookup(query)) {
-        owned_plan = defaultLookupPlan(allocator, sess.id, query) catch null;
-    } else if (plan_json) |pj| {
+    if (plan_json) |pj| {
         owned_plan = plan_parse.fromPlannerJson(allocator, sess.id, pj) catch null;
     }
 
@@ -106,11 +121,25 @@ pub fn runTurn(
             sink.emit(io, .{ .kind = .phase, .text = "act" }) catch {};
 
             const approved = op.asApproved();
+            const act_start = std.Io.Clock.awake.now(io);
             const outcome = exec.execute(allocator, &approved, sink, .{ .repo_root = cfg.repo_root }) catch {
+                const elapsed = act_start.untilNow(io, .awake);
+                const act_duration_ms = @divTrunc(elapsed.toNanoseconds(), 1_000_000);
+                const duration_text = std.fmt.allocPrint(allocator, " (failed in {d}ms)", .{act_duration_ms}) catch "";
+                defer if (duration_text.len > 0) allocator.free(duration_text);
+                if (duration_text.len > 0) sink.emit(io, .{ .kind = .token, .text = duration_text }) catch {};
+
                 verified_block = try std.fmt.allocPrint(allocator, "Executor failed to run plan steps.", .{});
                 const synth = try synthesizeResponse(allocator, io, provider, sink, pack, query, verified_block, false);
                 return .{ .response = synth.content, .verified = false, .streamed = synth.streamed };
             };
+            const elapsed = act_start.untilNow(io, .awake);
+            const act_duration_ms = @divTrunc(elapsed.toNanoseconds(), 1_000_000);
+            const act_duration_text = std.fmt.allocPrint(allocator, " ({d}ms)", .{act_duration_ms}) catch "";
+            defer if (act_duration_text.len > 0) allocator.free(act_duration_text);
+            if (act_duration_text.len > 0) {
+                sink.emit(io, .{ .kind = .token, .text = act_duration_text }) catch {};
+            }
             defer freeExecuteOutcome(allocator, outcome);
 
             const action_results = switch (outcome) {
@@ -121,11 +150,25 @@ pub fn runTurn(
             metrics.gInc("mission.phase.entered", 1);
             sink.emit(io, .{ .kind = .phase, .text = "verify" }) catch {};
 
+            const verify_start = std.Io.Clock.awake.now(io);
             const verify_out = mon.verify(allocator, sess.id, action_results, &.{}) catch {
+                const elapsed_verify = verify_start.untilNow(io, .awake);
+                const verify_duration_ms = @divTrunc(elapsed_verify.toNanoseconds(), 1_000_000);
+                const duration_text = std.fmt.allocPrint(allocator, " (failed in {d}ms)", .{verify_duration_ms}) catch "";
+                defer if (duration_text.len > 0) allocator.free(duration_text);
+                if (duration_text.len > 0) sink.emit(io, .{ .kind = .token, .text = duration_text }) catch {};
+
                 verified_block = try formatActionEvidence(allocator, action_results);
                 const synth = try synthesizeResponse(allocator, io, provider, sink, pack, query, verified_block, false);
                 return .{ .response = synth.content, .verified = false, .streamed = synth.streamed };
             };
+            const elapsed_verify = verify_start.untilNow(io, .awake);
+            const verify_duration_ms = @divTrunc(elapsed_verify.toNanoseconds(), 1_000_000);
+            const verify_duration_text = std.fmt.allocPrint(allocator, " ({d}ms)", .{verify_duration_ms}) catch "";
+            defer if (verify_duration_text.len > 0) allocator.free(verify_duration_text);
+            if (verify_duration_text.len > 0) {
+                sink.emit(io, .{ .kind = .token, .text = verify_duration_text }) catch {};
+            }
 
             switch (verify_out) {
                 .pass => |h| {
@@ -147,41 +190,6 @@ pub fn runTurn(
     return .{ .response = synth.content, .verified = verified, .streamed = synth.streamed };
 }
 
-/// Fallback plan when Analyst returns empty steps but query needs live evidence.
-fn defaultLookupPlan(allocator: std.mem.Allocator, mission_id: []const u8, query: []const u8) !plan_parse.OwnedPlan {
-    if (!needsLiveLookup(query)) return error.InvalidPlan;
-
-    var payloads: std.ArrayList([]const u8) = .empty;
-    errdefer {
-        for (payloads.items) |p| allocator.free(p);
-        payloads.deinit(allocator);
-    }
-    var steps: std.ArrayList(types.ActionStep) = .empty;
-    errdefer steps.deinit(allocator);
-
-    if (containsIgnoreCase(query, "weather")) {
-        const cmd = try allocator.dupe(u8, "curl -sf --max-time 15 'wttr.in/Hanoi?format=3'");
-        try payloads.append(allocator, cmd);
-        try steps.append(allocator, .{ .kind = .shell, .payload = cmd });
-    }
-    if (extractGrepTerm(query)) |term| {
-        const cmd = try std.fmt.allocPrint(allocator, "rg -m 12 -- {s} . 2>/dev/null || grep -r -m 12 -- {s} . 2>/dev/null || true", .{ term, term });
-        try payloads.append(allocator, cmd);
-        try steps.append(allocator, .{ .kind = .shell, .payload = cmd });
-    }
-    if (steps.items.len == 0) {
-        const cmd = try allocator.dupe(u8, "curl -sf --max-time 15 -I https://ziglang.org/download/ | head -5");
-        try payloads.append(allocator, cmd);
-        try steps.append(allocator, .{ .kind = .shell, .payload = cmd });
-    }
-
-    return .{
-        .mission_id = try allocator.dupe(u8, mission_id),
-        .steps = try steps.toOwnedSlice(allocator),
-        .step_payloads = try payloads.toOwnedSlice(allocator),
-        .rollback = try allocator.dupe(u8, ""),
-    };
-}
 
 fn buildEvidence(
     allocator: std.mem.Allocator,
@@ -199,14 +207,6 @@ fn buildEvidence(
         else => return err,
     };
     defer if (hits.len > 0) recall_mod.freeHitsSlice(allocator, hits);
-
-    var grep_hits: ?[]const u8 = null;
-    defer if (grep_hits) |g| allocator.free(g);
-    if (needsLiveLookup(query)) {
-        if (extractGrepTerm(query)) |term| {
-            grep_hits = perception.grep.search(allocator, io, cfg.repo_root, term, 8) catch null;
-        }
-    }
 
     var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(allocator);
@@ -226,15 +226,6 @@ fn buildEvidence(
         try buf.appendSlice(allocator, item);
     }
     try buf.appendSlice(allocator, "]");
-    if (grep_hits) |g| {
-        try buf.appendSlice(allocator, ",\"grep_hits\":");
-        const quoted = try jsonQuote(allocator, g[0..@min(g.len, 4096)]);
-        defer allocator.free(quoted);
-        try buf.appendSlice(allocator, quoted);
-    }
-    if (needsLiveLookup(query)) {
-        try buf.appendSlice(allocator, ",\"lookup_hint\":\"Plan shell fetch (curl) or grep/mcp steps for factual answers.\"");
-    }
     try buf.appendSlice(allocator, "}");
     return buf.toOwnedSlice(allocator);
 }
@@ -347,31 +338,6 @@ fn jsonQuote(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     return out.toOwnedSlice(allocator);
 }
 
-fn needsLiveLookup(query: []const u8) bool {
-    const needles = [_][]const u8{
-        "weather", "today", "search", "change note", "release note", "public",
-        "current", "latest", "http", "web",
-    };
-    for (needles) |n| {
-        if (containsIgnoreCase(query, n)) return true;
-    }
-    return false;
-}
-
-fn extractGrepTerm(query: []const u8) ?[]const u8 {
-    if (containsIgnoreCase(query, "zig")) return "0.16";
-    if (containsIgnoreCase(query, "change")) return "change";
-    return null;
-}
-
-fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
-    if (needle.len == 0 or needle.len > haystack.len) return false;
-    var i: usize = 0;
-    while (i + needle.len <= haystack.len) : (i += 1) {
-        if (std.ascii.eqlIgnoreCase(haystack[i..][0..needle.len], needle)) return true;
-    }
-    return false;
-}
 
 fn freeBlockResults(allocator: std.mem.Allocator, results: []types.BlockResult) void {
     for (results) |r| allocator.free(r.payload_json);

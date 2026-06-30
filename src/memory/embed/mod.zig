@@ -74,6 +74,31 @@ pub const Resolved = union(enum) {
 
 var runtime: ?Resolved = null;
 var runtime_config: ?Config = null;
+var embedding_cache: ?std.StringHashMap([]f32) = null;
+var cache_allocator: ?std.mem.Allocator = null;
+
+fn getCached(text: []const u8) ?[]const f32 {
+    if (embedding_cache) |map| {
+        return map.get(text);
+    }
+    return null;
+}
+
+fn putCached(text: []const u8, vec: []const f32) void {
+    const alloc = cache_allocator orelse return;
+    if (embedding_cache == null) {
+        embedding_cache = std.StringHashMap([]f32).init(alloc);
+    }
+    const dup_key = alloc.dupe(u8, text) catch return;
+    const dup_val = alloc.dupe(f32, vec) catch {
+        alloc.free(dup_key);
+        return;
+    };
+    embedding_cache.?.put(dup_key, dup_val) catch {
+        alloc.free(dup_key);
+        alloc.free(dup_val);
+    };
+}
 
 pub fn runtimeConfig() ?*const Config {
     if (runtime_config) |*c| return c;
@@ -90,6 +115,7 @@ pub fn activeProvider() ?Provider {
 
 /// Load config, optionally pull model, and install global embed provider.
 pub fn resolve(allocator: std.mem.Allocator, io: std.Io) !Resolved {
+    cache_allocator = allocator;
     if (runtime) |r| return r;
 
     var cfg = try Config.load(allocator, io);
@@ -117,6 +143,16 @@ pub fn pullModel(allocator: std.mem.Allocator, io: std.Io) !void {
 }
 
 pub fn deinitRuntime(allocator: std.mem.Allocator) void {
+    if (embedding_cache) |*map| {
+        var it = map.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.*);
+        }
+        map.deinit();
+        embedding_cache = null;
+        cache_allocator = null;
+    }
     if (runtime_config) |*c| {
         c.deinit(allocator);
         runtime_config = null;
@@ -153,6 +189,23 @@ pub fn embedWithRole(
 ) ![]f32 {
     const trimmed = truncateText(text, if (runtime_config) |*c| c.max_chars else cfg_mod.default_max_chars);
 
+    if (getCached(trimmed)) |cached| {
+        return try allocator.dupe(f32, cached);
+    }
+
+    const vec = try embedRaw(allocator, io, trimmed, role);
+
+    putCached(trimmed, vec);
+
+    return vec;
+}
+
+fn embedRaw(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    trimmed: []const u8,
+    role: EmbedRole,
+) ![]f32 {
     if (runtime) |*r| {
         const dim = if (runtime_config) |*c| c.dimensionForProvider(c.resolvedProvider()) else hash.dimension;
         const p = r.provider(dim);

@@ -1,0 +1,7 @@
+FROM qwen2.5:0.5b
+
+# Giới hạn context để tiết kiệm VRAM cho KV Cache
+PARAMETER num_ctx 4096
+
+# Ép đưa toàn bộ layer lên GPU
+PARAMETER num_gpu 999

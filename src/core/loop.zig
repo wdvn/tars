@@ -58,6 +58,7 @@ pub fn runAutonomous(
     while (iteration < cfg.max_iterations) : (iteration += 1) {
         metrics.gInc("mission.phase.entered", 1);
         try sink.emit(io, .{ .kind = .phase, .text = ctx.phase.name() });
+        const start = std.Io.Clock.awake.now(io);
 
         // ORIENT: merge filesystem perception with semantic recall into JSON evidence.
         if (ctx.phase == .orient) {
@@ -133,6 +134,13 @@ pub fn runAutonomous(
                     status = .done;
                     metrics.gInc("mission.verify.pass", 1);
                     metrics.gInc("mission.iterations", @floatFromInt(iteration + 1));
+                    const elapsed = start.untilNow(io, .awake);
+                    const duration_ms = @divTrunc(elapsed.toNanoseconds(), 1_000_000);
+                    const duration_text = std.fmt.allocPrint(allocator, " ({d}ms)", .{duration_ms}) catch "";
+                    defer if (duration_text.len > 0) allocator.free(duration_text);
+                    if (duration_text.len > 0) {
+                        try sink.emit(io, .{ .kind = .token, .text = duration_text });
+                    }
                     try sink.emit(io, .{ .kind = .done, .text = "mission complete" });
                     return .{ .iterations = iteration + 1, .final_status = status, .last_verify = last_verify };
                 },
@@ -162,11 +170,26 @@ pub fn runAutonomous(
                         .verify => .verify,
                     };
                     status = ctx.status;
+                    const elapsed = start.untilNow(io, .awake);
+                    const duration_ms = @divTrunc(elapsed.toNanoseconds(), 1_000_000);
+                    const duration_text = std.fmt.allocPrint(allocator, " (failed in {d}ms)", .{duration_ms}) catch "";
+                    defer if (duration_text.len > 0) allocator.free(duration_text);
+                    if (duration_text.len > 0) {
+                        try sink.emit(io, .{ .kind = .token, .text = duration_text });
+                    }
                     try sink.emit(io, .{ .kind = .phase, .text = loop.reason });
                     allocator.free(loop.detail_json);
                     continue;
                 },
             }
+        }
+
+        const elapsed = start.untilNow(io, .awake);
+        const duration_ms = @divTrunc(elapsed.toNanoseconds(), 1_000_000);
+        const duration_text = std.fmt.allocPrint(allocator, " ({d}ms)", .{duration_ms}) catch "";
+        defer if (duration_text.len > 0) allocator.free(duration_text);
+        if (duration_text.len > 0) {
+            try sink.emit(io, .{ .kind = .token, .text = duration_text });
         }
 
         // Advance to the next phase in the OODA cycle.

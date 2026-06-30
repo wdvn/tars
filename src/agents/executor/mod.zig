@@ -125,9 +125,12 @@ pub const Executor = struct {
             if (sink) |s| {
                 stream.emitToolStart(self.io, s, step.kind.name(), step.payload) catch {};
             }
+            const tool_start = std.Io.Clock.awake.now(self.io);
             var result = try block.run(allocator, self.io, act);
+            const elapsed = tool_start.untilNow(self.io, .awake);
+            const tool_duration_ms = @divTrunc(elapsed.toNanoseconds(), 1_000_000);
             if (sink) |s| {
-                stream.emitToolEnd(self.io, s, step.kind.name(), result.success, result.exit_code) catch {};
+                stream.emitToolEnd(self.io, s, step.kind.name(), result.success, result.exit_code, @intCast(tool_duration_ms)) catch {};
             }
             result.step_index = i;
 

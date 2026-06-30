@@ -145,13 +145,14 @@ pub fn emitToolStart(io: std.Io, sink: ?Sink, kind: []const u8, payload: []const
     try s.emit(io, .{ .kind = .tool_start, .text = text });
 }
 
-pub fn emitToolEnd(io: std.Io, sink: ?Sink, kind: []const u8, success: bool, exit_code: u8) !void {
+pub fn emitToolEnd(io: std.Io, sink: ?Sink, kind: []const u8, success: bool, exit_code: u8, duration_ms: i64) !void {
     const s = sink orelse return;
     const alloc = std.heap.page_allocator;
-    const text = std.fmt.allocPrint(alloc, "{{\"kind\":\"{s}\",\"success\":{s},\"exit\":{d}}}", .{
+    const text = std.fmt.allocPrint(alloc, "{{\"kind\":\"{s}\",\"success\":{s},\"exit\":{d},\"duration_ms\":{d}}}", .{
         kind,
         if (success) "true" else "false",
         exit_code,
+        duration_ms,
     }) catch return;
     defer alloc.free(text);
     try s.emit(io, .{ .kind = .tool_end, .text = text });
