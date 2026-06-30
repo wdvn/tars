@@ -132,11 +132,10 @@ pub const AnthropicProvider = struct {
         }
         defer allocator.free(resp.body);
 
-        const content = json_util.anthropicContent(resp.body) catch return LlmError.ParseError;
-        const text = content orelse return LlmError.ParseError;
-        const owned = try allocator.dupe(u8, text);
+        const owned = json_util.anthropicContent(allocator, resp.body) catch return LlmError.ParseError;
+        const text = owned orelse return LlmError.ParseError;
         return .{
-            .content_json = owned,
+            .content_json = text,
             .tokens_used = json_util.totalTokens(resp.body),
         };
     }
@@ -175,15 +174,12 @@ pub const AnthropicProvider = struct {
         const content = if (acc.items.len > 0)
             try acc.toOwnedSlice(allocator)
         else blk: {
-            const parsed = json_util.anthropicContent(resp.body) catch return LlmError.ParseError;
+            const parsed = json_util.anthropicContent(allocator, resp.body) catch return LlmError.ParseError;
             break :blk parsed orelse return LlmError.ParseError;
         };
 
-        errdefer allocator.free(content);
-        const owned = try allocator.dupe(u8, content);
-        allocator.free(content);
         return .{
-            .content_json = owned,
+            .content_json = content,
             .tokens_used = json_util.totalTokens(resp.body),
         };
     }

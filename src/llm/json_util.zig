@@ -45,9 +45,9 @@ pub fn objectGet(obj: std.json.ObjectMap, key: []const u8) ?std.json.Value {
     return obj.get(key);
 }
 
-/// Extract OpenAI chat completion message.content from choices[0].
-pub fn firstChoiceContent(body: []const u8) !?[]const u8 {
-    var parsed = try parseDynamic(std.heap.page_allocator, body);
+/// Extract OpenAI chat completion message.content from choices[0] (caller owns returned slice).
+pub fn firstChoiceContent(allocator: std.mem.Allocator, body: []const u8) !?[]const u8 {
+    var parsed = try parseDynamic(allocator, body);
     defer parsed.deinit();
 
     const root = parsed.value;
@@ -57,12 +57,13 @@ pub fn firstChoiceContent(body: []const u8) !?[]const u8 {
     const first = choices.array.items[0];
     const message = objectGet(first.object, "message") orelse return null;
     const content = objectGet(message.object, "content") orelse return null;
-    return valueAsString(content);
+    const text = valueAsString(content) orelse return null;
+    return try allocator.dupe(u8, text);
 }
 
-/// Extract Anthropic text from content[0].text block.
-pub fn anthropicContent(body: []const u8) !?[]const u8 {
-    var parsed = try parseDynamic(std.heap.page_allocator, body);
+/// Extract Anthropic text from content[0].text block (caller owns returned slice).
+pub fn anthropicContent(allocator: std.mem.Allocator, body: []const u8) !?[]const u8 {
+    var parsed = try parseDynamic(allocator, body);
     defer parsed.deinit();
 
     const content = objectGet(parsed.value.object, "content") orelse return null;
@@ -70,7 +71,8 @@ pub fn anthropicContent(body: []const u8) !?[]const u8 {
 
     const block = content.array.items[0];
     const text = objectGet(block.object, "text") orelse return null;
-    return valueAsString(text);
+    const s = valueAsString(text) orelse return null;
+    return try allocator.dupe(u8, s);
 }
 
 /// Sum usage tokens — supports OpenAI total_tokens or Anthropic input+output pair.

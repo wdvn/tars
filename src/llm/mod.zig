@@ -125,9 +125,9 @@ pub fn runtimeConfig() ?*const config.Config {
 
 /// Resolve backend (mini priority):
 /// 1. TARS_LLM_PROVIDER override
-/// 2. OPENAI_COMPAT_* / OPENAI_*
-/// 3. ANTHROPIC_API_KEY
-/// 4. OLLAMA_HOST fallback
+/// 2. Ollama local (default qwen2.5:0.5b, auto-pull)
+/// 3. OPENAI_COMPAT_URL / OPENAI_BASE_URL (explicit endpoint)
+/// 4. ANTHROPIC_API_KEY
 /// 5. stub
 pub fn resolve(allocator: std.mem.Allocator, io: std.Io) !Resolved {
     try env.initDotEnv(allocator, io);
@@ -145,26 +145,30 @@ pub fn resolve(allocator: std.mem.Allocator, io: std.Io) !Resolved {
             return .{ .anthropic = try anthropic.AnthropicProvider.create(allocator, io) };
         }
         if (std.ascii.eqlIgnoreCase(choice, "ollama")) {
-            return .{ .ollama = try openai.OpenAiProvider.createOllama(allocator, io) };
+            return try resolveOllama(allocator, io);
         }
         if (std.ascii.eqlIgnoreCase(choice, "stub")) {
             return .{ .stub = {} };
         }
     }
 
-    if (try config.loadOpenAiCompat(allocator, io)) |compat| {
-        return .{ .openai = try openai.OpenAiProvider.createFromCompat(allocator, io, compat, .openai) };
+    return try resolveOllama(allocator, io);
+}
+
+fn resolveOllama(allocator: std.mem.Allocator, io: std.Io) !Resolved {
+    const ollama_util = @import("../memory/embed/ollama.zig");
+    var compat = try config.loadOllamaCompat(allocator, io);
+    errdefer compat.deinit(allocator);
+
+    if (try config.llmAutoPullEnabled(allocator, io)) {
+        const host = try config.ollamaHost(allocator, io);
+        defer allocator.free(host);
+        if (!ollama_util.OllamaEmbedder.modelPresent(allocator, io, host, compat.model)) {
+            ollama_util.OllamaEmbedder.pullModel(allocator, io, host, compat.model) catch {};
+        }
     }
 
-    if (anthropic.AnthropicProvider.create(allocator, io)) |provider| {
-        return .{ .anthropic = provider };
-    } else |_| {}
-
-    if (openai.OpenAiProvider.createOllama(allocator, io)) |provider| {
-        return .{ .ollama = provider };
-    } else |_| {}
-
-    return .{ .stub = {} };
+    return .{ .ollama = try openai.OpenAiProvider.createFromCompat(allocator, io, compat, .ollama) };
 }
 
 pub fn deinitRuntime(allocator: std.mem.Allocator) void {
@@ -193,7 +197,7 @@ pub const StubProvider = struct {
         const json = if (std.mem.indexOf(u8, request.output_schema, "rollback") != null)
             \\{"steps":["echo stub-plan-step"],"rollback":"echo analyst-plan-rollback","contingencies":["re-run verify"]}
         else
-            \\{"status":"stub","note":"set OPENAI_COMPAT_URL, ANTHROPIC_API_KEY, or OLLAMA_HOST"}
+            \\{"status":"stub","note":"set TARS_LLM_PROVIDER=ollama or OPENAI_COMPAT_URL / ANTHROPIC_API_KEY"}
         ;
         return .{
             .content_json = try allocator.dupe(u8, json),
@@ -211,7 +215,7 @@ pub const StubProvider = struct {
         _ = ptr;
         _ = request;
         const json =
-            \\{"status":"stub","note":"set OPENAI_COMPAT_URL, ANTHROPIC_API_KEY, or OLLAMA_HOST"}
+            \\{"status":"stub","note":"set TARS_LLM_PROVIDER=ollama or OPENAI_COMPAT_URL / ANTHROPIC_API_KEY"}
         ;
         for (json) |c| {
             var one: [1]u8 = .{c};

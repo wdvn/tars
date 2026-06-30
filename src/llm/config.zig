@@ -3,6 +3,12 @@
 const std = @import("std");
 const env = @import("env.zig");
 
+/// Default local LLM via Ollama (OpenAI-compatible /v1).
+pub const default_ollama_host = "http://127.0.0.1:11434";
+pub const default_ollama_model = "qwen2.5:0.5b";
+/// Alternative small model — set `TARS_LLM_MODEL=deepseek-r1:0.5b` to use.
+pub const alt_ollama_model = "deepseek-r1:0.5b";
+
 pub const Config = struct {
     max_tokens: u32 = 8192,
     system_prompt: []const u8 = "",
@@ -67,16 +73,18 @@ pub const OpenAiCompat = struct {
 };
 
 /// Resolve OpenAI-compatible backend from env (mini priority: OPENAI_COMPAT_* then OPENAI_*).
-pub fn loadOpenAiCompat(allocator: std.mem.Allocator, io: std.Io) !?OpenAiCompat {
+/// When `require_explicit_url` is true, an API key alone does not enable auto-detection (use Ollama default).
+pub fn loadOpenAiCompat(allocator: std.mem.Allocator, io: std.Io, require_explicit_url: bool) !?OpenAiCompat {
     const url = try env.getFirst(allocator, io, &.{ "OPENAI_COMPAT_URL", "OPENAI_BASE_URL" });
     const key = try env.getFirst(allocator, io, &.{ "OPENAI_COMPAT_API_KEY", "OPENAI_API_KEY" });
 
+    if (require_explicit_url and url == null) return null;
     if (url == null and key == null) return null;
 
     const base_raw = url orelse try allocator.dupe(u8, "https://api.openai.com/v1");
-    errdefer if (url == null) allocator.free(base_raw);
+    defer allocator.free(base_raw);
     const base_url = try env.trimSlash(allocator, base_raw);
-    if (!std.mem.eql(u8, base_raw, base_url)) allocator.free(base_raw);
+    errdefer allocator.free(base_url);
 
     const api_key = key orelse try allocator.dupe(u8, "");
     errdefer if (key == null) allocator.free(api_key);
@@ -96,16 +104,22 @@ pub fn loadOpenAiCompat(allocator: std.mem.Allocator, io: std.Io) !?OpenAiCompat
     };
 }
 
-/// Ollama via OpenAI-compatible /v1/chat/completions (mini fallback backend).
+/// Ollama via OpenAI-compatible /v1/chat/completions (default local LLM backend).
 pub fn loadOllamaCompat(allocator: std.mem.Allocator, io: std.Io) !OpenAiCompat {
-    const host_raw = try env.getOr(allocator, io, "OLLAMA_HOST", "http://localhost:11434");
+    const host_raw = try env.getOr(allocator, io, "OLLAMA_HOST", default_ollama_host);
+    defer allocator.free(host_raw);
     const host = try env.trimSlash(allocator, host_raw);
-    if (!std.mem.eql(u8, host_raw, host)) allocator.free(host_raw);
+    defer allocator.free(host);
 
     const base_url = try std.fmt.allocPrint(allocator, "{s}/v1", .{host});
-    allocator.free(host);
 
-    const model = try env.getOr(allocator, io, "OLLAMA_MODEL", "llama3");
+    const model = if (try env.get(allocator, io, "TARS_LLM_MODEL")) |raw| blk: {
+        defer allocator.free(raw);
+        break :blk try allocator.dupe(u8, std.mem.trim(u8, raw, " \r\n"));
+    } else if (try env.get(allocator, io, "OLLAMA_MODEL")) |raw| blk: {
+        defer allocator.free(raw);
+        break :blk try allocator.dupe(u8, std.mem.trim(u8, raw, " \r\n"));
+    } else try allocator.dupe(u8, default_ollama_model);
     const api_key = try allocator.dupe(u8, "");
     const api_header = try allocator.dupe(u8, "Authorization");
 
@@ -116,6 +130,23 @@ pub fn loadOllamaCompat(allocator: std.mem.Allocator, io: std.Io) !OpenAiCompat 
         .model = model,
         .from_ollama = true,
     };
+}
+
+/// Trimmed OLLAMA_HOST for `ollama pull` / `ollama show`.
+pub fn ollamaHost(allocator: std.mem.Allocator, io: std.Io) ![]const u8 {
+    const host_raw = try env.getOr(allocator, io, "OLLAMA_HOST", default_ollama_host);
+    defer allocator.free(host_raw);
+    return env.trimSlash(allocator, host_raw);
+}
+
+/// True unless TARS_LLM_AUTO_PULL=0|false (default: auto-pull missing model).
+pub fn llmAutoPullEnabled(allocator: std.mem.Allocator, io: std.Io) !bool {
+    if (try env.get(allocator, io, "TARS_LLM_AUTO_PULL")) |raw| {
+        defer allocator.free(raw);
+        const t = std.mem.trim(u8, raw, " \r\n");
+        return !std.mem.eql(u8, t, "0") and !std.mem.eql(u8, t, "false");
+    }
+    return true;
 }
 
 /// Anthropic Messages API settings (ANTHROPIC_* + CLAUDE_MODEL alias).
@@ -135,8 +166,9 @@ pub fn loadAnthropic(allocator: std.mem.Allocator, io: std.Io) !?AnthropicSettin
     const api_key = try env.get(allocator, io, "ANTHROPIC_API_KEY") orelse return null;
 
     const base_raw = try env.getOr(allocator, io, "ANTHROPIC_BASE_URL", "https://api.anthropic.com");
+    defer allocator.free(base_raw);
     const base_url = try env.trimSlash(allocator, base_raw);
-    if (!std.mem.eql(u8, base_raw, base_url)) allocator.free(base_raw);
+    errdefer allocator.free(base_url);
 
     const model = try env.getFirst(allocator, io, &.{ "CLAUDE_MODEL", "ANTHROPIC_MODEL" }) orelse
         try allocator.dupe(u8, "claude-sonnet-4-20250514");

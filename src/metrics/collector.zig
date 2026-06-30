@@ -63,6 +63,7 @@ pub const Metrics = struct {
     pub fn setGauge(self: *Metrics, name: []const u8, val: f64) !void {
         // Gauges are keyed by metric name only (no tag dimension).
         const name_owned = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(name_owned);
         const gop = try self.gauges.getOrPut(name_owned);
         if (gop.found_existing) {
             // Key already in map — discard duplicate we just allocated.
@@ -76,6 +77,7 @@ pub const Metrics = struct {
     fn record(self: *Metrics, name: []const u8, delta: f64, tags_json: []const u8) !void {
         // Totals are keyed by metric name + tags so the same metric can fan out.
         const key = try self.makeKey(name, tags_json);
+        errdefer self.allocator.free(key);
         const gop = try self.totals.getOrPut(key);
         if (gop.found_existing) {
             self.allocator.free(key);

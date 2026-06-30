@@ -36,6 +36,24 @@ fn initMetrics(gpa: std.mem.Allocator, command: []const u8, out: *tars.metrics.M
     tars.metrics.setGlobal(out);
 }
 
+/// Stream completion with stub fallback when the resolved provider cannot reach its backend.
+fn completeStreamWithFallback(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    w: *std.Io.Writer,
+    metrics_state: *tars.metrics.Metrics,
+    provider: *tars.llm.Provider,
+    req: tars.llm.CompletionRequest,
+    sink: tars.stream.Sink,
+) !tars.llm.CompletionResponse {
+    return provider.completeStream(gpa, io, req, sink) catch |err| {
+        try w.print("  stream failed ({s}) — stub fallback\n", .{@errorName(err)});
+        try w.flush();
+        provider.* = tars.metrics.instrumentProvider(metrics_state, io, tars.llm.StubProvider.init());
+        return provider.completeStream(gpa, io, req, sink);
+    };
+}
+
 /// Persist in-memory counters, print report, then tear down the global handle.
 fn finishMetrics(gpa: std.mem.Allocator, io: std.Io, store: *tars.memory.store.Store, m: *tars.metrics.Metrics, w: *std.Io.Writer, json: bool) !void {
     try tars.metrics.persist.flush(m, store, io);
@@ -108,15 +126,16 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
 
     try store.applySchema(io);
 
-    var metrics_state: tars.metrics.Metrics = undefined;
-    try initMetrics(gpa, "demo", &metrics_state);
-
     const mission_id = "demo-runtime";
     const sink = tars.stream.resolveStdout(gpa, io) catch tars.stream.StdoutSink.init();
 
     var stdout_buffer: [8192]u8 = undefined;
     var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
     const w = &stdout_writer.interface;
+
+    var metrics_state: tars.metrics.Metrics = undefined;
+    try initMetrics(gpa, "demo", &metrics_state);
+    defer finishMetrics(gpa, io, &store, &metrics_state, w, false) catch {};
 
     try w.print("tars runtime demo — streaming · perception · recall · session · loop\n\n", .{});
     try w.flush();
@@ -127,7 +146,7 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
     var llm_ctx = try tars.llm.resolve(gpa, io);
     defer llm_ctx.deinit();
     defer tars.llm.deinitRuntime(gpa);
-    const provider = tars.metrics.instrumentProvider(&metrics_state, io, llm_ctx.provider());
+    var provider = tars.metrics.instrumentProvider(&metrics_state, io, llm_ctx.provider());
     try w.print("  provider: {s}\n", .{llm_ctx.kindName()});
     try w.flush();
 
@@ -140,7 +159,7 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
         .messages = &.{.{ .role = "user", .content = "status report" }},
         .output_schema = "{}",
     };
-    const stream_resp = try provider.completeStream(gpa, io, stream_req, sink);
+    const stream_resp = try completeStreamWithFallback(gpa, io, w, &metrics_state, &provider, stream_req, sink);
     defer gpa.free(stream_resp.content_json);
     try w.print("\n  tokens: {d}\n\n", .{stream_resp.tokens_used});
 
@@ -236,7 +255,6 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
     }
 
     try w.print("\n[7] Operational metrics\n", .{});
-    try finishMetrics(gpa, io, &store, &metrics_state, w, false);
 }
 
 /// Interactive REPL with recall-augmented streaming responses.
@@ -246,8 +264,13 @@ fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
     defer store.deinit();
     try store.applySchema(io);
 
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
+    const w = &stdout_writer.interface;
+
     var metrics_state: tars.metrics.Metrics = undefined;
     try initMetrics(gpa, "chat", &metrics_state);
+    defer finishMetrics(gpa, io, &store, &metrics_state, w, false) catch {};
 
     const embed_ctx = try tars.memory.embed.resolve(gpa, io);
     defer tars.memory.embed.deinitRuntime(gpa);
@@ -259,16 +282,12 @@ fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
     var llm_ctx = try tars.llm.resolve(gpa, io);
     defer llm_ctx.deinit();
     defer tars.llm.deinitRuntime(gpa);
-    const provider = tars.metrics.instrumentProvider(&metrics_state, io, llm_ctx.provider());
+    var provider = tars.metrics.instrumentProvider(&metrics_state, io, llm_ctx.provider());
     const sink = tars.stream.resolveStdout(gpa, io) catch tars.stream.StdoutSink.init();
 
     const runtime_cfg = tars.llm.runtimeConfig();
     const system_prompt = if (runtime_cfg) |rc| if (rc.system_prompt.len > 0) rc.system_prompt else "T.A.R.S. crew analyst" else "T.A.R.S. crew analyst";
     const max_tokens = if (runtime_cfg) |rc| rc.max_tokens else 4096;
-
-    var stdout_buffer: [4096]u8 = undefined;
-    var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
-    const w = &stdout_writer.interface;
 
     try w.print("T.A.R.S. chat ({s}, session {s}). Empty line to exit.\n> ", .{ llm_ctx.kindName(), sess.id });
     try w.flush();
@@ -299,7 +318,7 @@ fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
             .messages = &.{.{ .role = "user", .content = line }},
             .output_schema = "{}",
         };
-        const resp = try provider.completeStream(gpa, io, req, sink);
+        const resp = try completeStreamWithFallback(gpa, io, w, &metrics_state, &provider, req, sink);
         defer gpa.free(resp.content_json);
 
         try sess.appendAgent("analyst", resp.content_json);
@@ -308,5 +327,4 @@ fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
     }
 
     try w.print("\n--- metrics ---\n", .{});
-    try finishMetrics(gpa, io, &store, &metrics_state, w, false);
 }

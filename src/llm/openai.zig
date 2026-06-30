@@ -33,7 +33,7 @@ pub const OpenAiProvider = struct {
 
     /// Load from OPENAI_COMPAT_* / OPENAI_* env (after dotenv).
     pub fn create(allocator: std.mem.Allocator, io: std.Io) LlmError!OpenAiProvider {
-        const compat = config.loadOpenAiCompat(allocator, io) catch return LlmError.OutOfMemory;
+        const compat = config.loadOpenAiCompat(allocator, io, false) catch return LlmError.OutOfMemory;
         const c = compat orelse return LlmError.MissingApiKey;
         return createFromCompat(allocator, io, c, .openai);
     }
@@ -177,11 +177,10 @@ pub const OpenAiProvider = struct {
         }
         defer allocator.free(resp.body);
 
-        const content = json_util.firstChoiceContent(resp.body) catch return LlmError.ParseError;
-        const text = content orelse return LlmError.ParseError;
-        const owned = try allocator.dupe(u8, text);
+        const owned = json_util.firstChoiceContent(allocator, resp.body) catch return LlmError.ParseError;
+        const text = owned orelse return LlmError.ParseError;
         return .{
-            .content_json = owned,
+            .content_json = text,
             .tokens_used = json_util.totalTokens(resp.body),
         };
     }
@@ -218,15 +217,12 @@ pub const OpenAiProvider = struct {
         const content = if (acc.items.len > 0)
             try acc.toOwnedSlice(allocator)
         else blk: {
-            const parsed = json_util.firstChoiceContent(resp.body) catch return LlmError.ParseError;
+            const parsed = json_util.firstChoiceContent(allocator, resp.body) catch return LlmError.ParseError;
             break :blk parsed orelse return LlmError.ParseError;
         };
 
-        errdefer allocator.free(content);
-        const owned = try allocator.dupe(u8, content);
-        allocator.free(content);
         return .{
-            .content_json = owned,
+            .content_json = content,
             .tokens_used = json_util.totalTokens(resp.body),
         };
     }
