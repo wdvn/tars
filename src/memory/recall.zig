@@ -1,7 +1,7 @@
 //! Semantic recall — local cosine (always) + sqlite-vector (when extension loaded).
 
 const std = @import("std");
-const embed = @import("embed.zig");
+const embed = @import("embed/mod.zig");
 const store_mod = @import("store.zig");
 const metrics = @import("../metrics/collector.zig");
 
@@ -28,7 +28,7 @@ pub fn recall(
     metrics.gInc("memory.recall.queries", 1);
 
     // Embed the query text into the same vector space as stored episodes.
-    const query_vec = embed.embed(allocator, query_text) catch return RecallError.OutOfMemory;
+    const query_vec = embed.embedQuery(allocator, io, query_text) catch return RecallError.OutOfMemory;
     defer allocator.free(query_vec);
 
     // Load all episodes that have embeddings in meta JSON.

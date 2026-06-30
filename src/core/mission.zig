@@ -3,7 +3,7 @@
 const std = @import("std");
 const types = @import("../types.zig");
 const memory = @import("../memory/mod.zig");
-const embed = @import("../memory/embed.zig");
+const embed = @import("../memory/embed/mod.zig");
 const metrics = @import("../metrics/collector.zig");
 
 pub fn writeEpisodeFromOutcome(
@@ -16,16 +16,20 @@ pub fn writeEpisodeFromOutcome(
     tags: []const []const u8,
 ) !void {
     // Embed content locally and store vector + tags inside meta JSON.
-    const vec = try embed.embed(allocator, content);
+    const vec = try embed.embedDocument(allocator, io, content);
     defer allocator.free(vec);
     const emb_json = try embed.serializeJson(allocator, vec);
     defer allocator.free(emb_json);
 
+    const provider_name = if (embed.runtimeConfig()) |rc| rc.resolvedProvider() else "hash";
+    const model_name = if (embed.runtimeConfig()) |rc| rc.model else "hash";
+    const dim = embed.dimension();
+
     const tags_str = try joinTags(allocator, tags);
     defer allocator.free(tags_str);
     const meta = try std.fmt.allocPrint(allocator,
-        \\{{"embedding":{s},"tags":[{s}]}}
-    , .{ emb_json, tags_str });
+        \\{{"embedding":{s},"embed_provider":"{s}","embed_model":"{s}","embed_dim":{d},"tags":[{s}]}}
+    , .{ emb_json, provider_name, model_name, dim, tags_str });
     defer allocator.free(meta);
 
     const now: i64 = 0;

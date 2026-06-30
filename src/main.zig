@@ -19,6 +19,12 @@ pub fn main(init: std.process.Init) !void {
             try runReport(gpa, io, args.len > 2 and std.mem.eql(u8, args[2], "--json"));
             return;
         }
+        if (std.mem.eql(u8, args[1], "embed")) {
+            if (args.len > 2 and std.mem.eql(u8, args[2], "pull")) {
+                try runEmbedPull(gpa, io);
+                return;
+            }
+        }
     }
 
     try runDemo(gpa, io);
@@ -69,6 +75,28 @@ fn runReport(gpa: std.mem.Allocator, io: std.Io, json: bool) !void {
         try tars.metrics.report.printHuman(w, &m, db);
         try tars.metrics.report.printHistory(&store, io, w);
     }
+    try w.flush();
+}
+
+/// Pull embedding model via Ollama (`TARS_EMBED_MODEL`, default qwen3-embedding:0.6b).
+fn runEmbedPull(gpa: std.mem.Allocator, io: std.Io) !void {
+    var cfg = try tars.memory.embed.Config.load(gpa, io);
+    defer cfg.deinit(gpa);
+
+    if (!std.mem.eql(u8, cfg.resolvedProvider(), "ollama")) {
+        var stderr_buffer: [512]u8 = undefined;
+        var stderr_writer = std.Io.File.stderr().writer(io, &stderr_buffer);
+        try stderr_writer.interface.print("TARS_EMBED_PROVIDER must be ollama (or set TARS_EMBED_MODEL)\n", .{});
+        try stderr_writer.interface.flush();
+        return error.ProviderNotOllama;
+    }
+
+    try tars.memory.embed.pullModel(gpa, io);
+
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
+    const w = &stdout_writer.interface;
+    try w.print("Pulled embedding model: {s} @ {s}\n", .{ cfg.model, cfg.ollama_host });
     try w.flush();
 }
 
@@ -126,6 +154,13 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
     try w.print("  grep MissionContext: {d} byte(s)\n\n", .{grep_hits.len});
 
     try w.print("[3] Episodic memory + semantic recall\n", .{});
+    const embed_ctx = try tars.memory.embed.resolve(gpa, io);
+    defer tars.memory.embed.deinitRuntime(gpa);
+    _ = embed_ctx;
+    try w.print("  embed: {s} dim={d}\n", .{
+        if (tars.memory.embed.runtimeConfig()) |c| c.resolvedProvider() else "hash",
+        tars.memory.embed.dimension(),
+    });
     // Seed two episodes so recall has vectors to rank against the query.
     try tars.core.mission.writeEpisodeFromOutcome(gpa, &store, io, mission_id, "analyst", "Tri-agent skeleton uses ORIENT ASSESS PLAN ACT VERIFY phases", &.{ "architecture", "demo" });
     try tars.core.mission.writeEpisodeFromOutcome(gpa, &store, io, mission_id, "monitor", "Verify phase checks executor output and publishes handoff", &.{ "verify" });
@@ -213,6 +248,10 @@ fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
 
     var metrics_state: tars.metrics.Metrics = undefined;
     try initMetrics(gpa, "chat", &metrics_state);
+
+    const embed_ctx = try tars.memory.embed.resolve(gpa, io);
+    defer tars.memory.embed.deinitRuntime(gpa);
+    _ = embed_ctx;
 
     var sess = try tars.session.Session.create(gpa, store, io, "chat");
     defer sess.deinit(gpa);
