@@ -1,0 +1,260 @@
+const std = @import("std");
+const tars = @import("tars");
+
+pub fn main(init: std.process.Init) !void {
+    const gpa = init.gpa;
+    const io = init.io;
+
+    const args = try init.minimal.args.toSlice(gpa);
+    defer gpa.free(args);
+
+    if (args.len > 1) {
+        if (std.mem.eql(u8, args[1], "chat")) {
+            try runChat(gpa, io);
+            return;
+        }
+        if (std.mem.eql(u8, args[1], "report")) {
+            try runReport(gpa, io, args.len > 2 and std.mem.eql(u8, args[2], "--json"));
+            return;
+        }
+    }
+
+    try runDemo(gpa, io);
+}
+
+fn initMetrics(gpa: std.mem.Allocator, command: []const u8, out: *tars.metrics.Metrics) !void {
+    out.* = try tars.metrics.Metrics.init(gpa, command, "tars");
+    tars.metrics.setGlobal(out);
+}
+
+fn finishMetrics(gpa: std.mem.Allocator, io: std.Io, store: *tars.memory.store.Store, m: *tars.metrics.Metrics, w: *std.Io.Writer, json: bool) !void {
+    try tars.metrics.persist.flush(m, store, io);
+    const db = try tars.metrics.report.loadDbTotals(store, io, gpa);
+    if (json) {
+        try tars.metrics.report.printJson(gpa, w, m, db);
+        try w.print("\n", .{});
+    } else {
+        try tars.metrics.report.printHuman(w, m, db);
+        try tars.metrics.report.printHistory(store, io, w);
+    }
+    try w.flush();
+    tars.metrics.setGlobal(null);
+    m.deinit();
+}
+
+fn runReport(gpa: std.mem.Allocator, io: std.Io, json: bool) !void {
+    var store = try tars.memory.store.Store.init(gpa, ".tars/tars.db");
+    defer store.deinit();
+    try store.applySchema(io);
+
+    var m = try tars.metrics.Metrics.init(gpa, "report", "query");
+    defer m.deinit();
+
+    const db = try tars.metrics.report.loadDbTotals(&store, io, gpa);
+
+    var stdout_buffer: [16384]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
+    const w = &stdout_writer.interface;
+
+    if (json) {
+        try tars.metrics.report.printJson(gpa, w, &m, db);
+        try w.print("\n", .{});
+    } else {
+        try w.print("T.A.R.S. metrics catalog (registry — baseline zeros for query-only run)\n\n", .{});
+        try tars.metrics.report.printHuman(w, &m, db);
+        try tars.metrics.report.printHistory(&store, io, w);
+    }
+    try w.flush();
+}
+
+fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
+    const db_path = ".tars/tars.db";
+    var store = try tars.memory.store.Store.init(gpa, db_path);
+    defer store.deinit();
+
+    try store.applySchema(io);
+
+    var metrics_state: tars.metrics.Metrics = undefined;
+    try initMetrics(gpa, "demo", &metrics_state);
+
+    const mission_id = "demo-runtime";
+    const sink = tars.stream.StdoutSink.init();
+
+    var stdout_buffer: [8192]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
+    const w = &stdout_writer.interface;
+
+    try w.print("tars runtime demo — streaming · perception · recall · session · loop\n\n", .{});
+    try w.flush();
+
+    try w.print("[1] Streaming LLM\n", .{});
+    try w.flush();
+    var llm_ctx = try tars.llm.resolve(gpa, io);
+    defer llm_ctx.deinit();
+    const provider = tars.metrics.instrumentProvider(&metrics_state, io, llm_ctx.provider());
+    try w.print("  provider: {s}\n", .{llm_ctx.kindName()});
+    try w.flush();
+
+    const stream_req = tars.llm.CompletionRequest{
+        .config = .{},
+        .system = "T.A.R.S.",
+        .messages = &.{.{ .role = "user", .content = "status report" }},
+        .output_schema = "{}",
+    };
+    const stream_resp = try provider.completeStream(gpa, io, stream_req, sink);
+    defer gpa.free(stream_resp.content_json);
+    try w.print("\n  tokens: {d}\n\n", .{stream_resp.tokens_used});
+
+    try w.print("[2] Codebase perception\n", .{});
+    const evidence = try tars.perception.gatherEvidence(gpa, io, ".", &.{ "build.zig", "src/root.zig" });
+    defer gpa.free(evidence);
+    try w.print("  evidence bytes: {d}\n", .{evidence.len});
+
+    const grep_hits = try tars.perception.grep.search(gpa, io, ".", "MissionContext", 5);
+    defer gpa.free(grep_hits);
+    try w.print("  grep MissionContext: {d} byte(s)\n\n", .{grep_hits.len});
+
+    try w.print("[3] Episodic memory + semantic recall\n", .{});
+    try tars.core.mission.writeEpisodeFromOutcome(gpa, &store, io, mission_id, "analyst", "Tri-agent skeleton uses ORIENT ASSESS PLAN ACT VERIFY phases", &.{ "architecture", "demo" });
+    try tars.core.mission.writeEpisodeFromOutcome(gpa, &store, io, mission_id, "monitor", "Verify phase checks executor output and publishes handoff", &.{ "verify" });
+
+    const hits = try tars.memory.recall.recall(gpa, &store, io, "verify handoff monitor", 2);
+    defer {
+        for (hits) |h| {
+            gpa.free(h.content);
+            gpa.free(h.meta_json);
+        }
+        gpa.free(hits);
+    }
+    for (hits) |h| try w.print("  recall score={d:.3}: {s}\n", .{ h.score, h.content[0..@min(h.content.len, 60)] });
+    try w.print("\n", .{});
+
+    try w.print("[4] Multi-turn session\n", .{});
+    var sess = try tars.session.Session.create(gpa, store, io, mission_id);
+    defer sess.deinit(gpa);
+    try sess.appendOperator("What is the mission loop?");
+    try sess.appendAgent("analyst", "ORIENT → ASSESS → PLAN → ACT → VERIFY with loop-back.");
+    const ctx_lines = try sess.recentContext(gpa, 10);
+    defer gpa.free(ctx_lines);
+    try w.print("  session {s}: {d} byte(s) context\n\n", .{ sess.id, ctx_lines.len });
+
+    try w.print("[5] MCP bridge\n", .{});
+    if (tars.mcp.client.Client.fromEnv(gpa, io)) |client| {
+        defer client.deinit();
+        const tools = client.listTools(gpa, io) catch |err| switch (err) {
+            else => try tars.mcp.client.stubCall(gpa, "list"),
+        };
+        defer gpa.free(tools);
+        try w.print("  MCP tools: {d} byte(s)\n\n", .{tools.len});
+    } else {
+        const stub = try tars.mcp.client.stubCall(gpa, "filesystem/read");
+        defer gpa.free(stub);
+        try w.print("  {s} (set TARS_MCP_CMD for live MCP)\n\n", .{stub});
+    }
+
+    try w.print("[6] Autonomous loop\n", .{});
+    var ctx = tars.core.mission.defaultContext(mission_id, "Runtime capability demo");
+    ctx.evidence = evidence;
+
+    const plan = tars.types.ApprovedPlan{
+        .mission_id = mission_id,
+        .steps = &.{
+            .{ .kind = .shell, .payload = "echo tars-loop-ok" },
+            .{ .kind = .git, .payload = "status --short" },
+        },
+        .rollback = "",
+    };
+
+    const loop_result = try tars.core.loop.runAutonomous(gpa, io, store, provider, sink, .{
+        .max_iterations = 6,
+        .verify_commands = &.{"test -f build.zig"},
+        .perception_paths = &.{ "build.zig" },
+        .repo_root = ".",
+    }, &ctx, &plan);
+
+    try w.print("  iterations: {d}, status: {s}\n", .{ loop_result.iterations, loop_result.final_status.name() });
+    if (loop_result.last_verify) |vo| {
+        switch (vo) {
+            .pass => |h| {
+                try w.print("  verify: PASS\n", .{});
+                gpa.free(h.summary_json);
+            },
+            .fail => |l| {
+                try w.print("  verify: FAIL → {s}\n", .{l.reason});
+                gpa.free(l.detail_json);
+            },
+        }
+    }
+
+    try w.print("\n[7] Operational metrics\n", .{});
+    try finishMetrics(gpa, io, &store, &metrics_state, w, false);
+}
+
+fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
+    const db_path = ".tars/tars.db";
+    var store = try tars.memory.store.Store.init(gpa, db_path);
+    defer store.deinit();
+    try store.applySchema(io);
+
+    var metrics_state: tars.metrics.Metrics = undefined;
+    try initMetrics(gpa, "chat", &metrics_state);
+
+    var sess = try tars.session.Session.create(gpa, store, io, "chat");
+    defer sess.deinit(gpa);
+
+    var llm_ctx = try tars.llm.resolve(gpa, io);
+    defer llm_ctx.deinit();
+    const provider = tars.metrics.instrumentProvider(&metrics_state, io, llm_ctx.provider());
+    const sink = tars.stream.StdoutSink.init();
+
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
+    const w = &stdout_writer.interface;
+
+    try w.print("T.A.R.S. chat ({s}, session {s}). Empty line to exit.\n> ", .{ llm_ctx.kindName(), sess.id });
+    try w.flush();
+
+    var reader_buffer: [4096]u8 = undefined;
+    var stdin_reader = std.Io.File.stdin().reader(io, &reader_buffer);
+
+    while (true) {
+        const raw = stdin_reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return err,
+        };
+        const line = std.mem.trim(u8, raw, " \r\n");
+        if (line.len == 0) break;
+
+        try sess.appendOperator(line);
+
+        const hits = tars.memory.recall.recall(gpa, &store, io, line, 2) catch |err| switch (err) {
+            error.SqliteFailed => &[_]tars.memory.recall.Hit{},
+            else => |e| return e,
+        };
+        defer {
+            if (hits.len > 0) {
+                for (hits) |hit| {
+                    gpa.free(hit.content);
+                    gpa.free(hit.meta_json);
+                }
+                gpa.free(hits);
+            }
+        }
+
+        const req = tars.llm.CompletionRequest{
+            .config = .{},
+            .system = "T.A.R.S. crew analyst",
+            .messages = &.{.{ .role = "user", .content = line }},
+            .output_schema = "{}",
+        };
+        const resp = try provider.completeStream(gpa, io, req, sink);
+        defer gpa.free(resp.content_json);
+
+        try sess.appendAgent("analyst", resp.content_json);
+        try w.print("\n> ", .{});
+        try w.flush();
+    }
+
+    try w.print("\n--- metrics ---\n", .{});
+    try finishMetrics(gpa, io, &store, &metrics_state, w, false);
+}
