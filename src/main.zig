@@ -120,7 +120,7 @@ fn runEmbedPull(gpa: std.mem.Allocator, io: std.Io) !void {
 
 /// End-to-end showcase of streaming, perception, recall, session, loop, and metrics.
 fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
-    const db_path = ".tars/tars.db";
+    const db_path = "/home/mypc/projects/tars/.tars/tars.db";
     var store = try tars.memory.store.Store.init(gpa, db_path);
     defer store.deinit();
 
@@ -259,7 +259,7 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
 
 /// Interactive REPL with recall-augmented streaming responses.
 fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
-    const db_path = ".tars/tars.db";
+    const db_path = "/home/mypc/projects/tars/.tars/tars.db";
     var store = try tars.memory.store.Store.init(gpa, db_path);
     defer store.deinit();
     try store.applySchema(io);
