@@ -20,6 +20,20 @@ The **tars** project is inspired by T.A.R.S. (Tactical Autonomous Robot Spacecra
 
 ---
 
+## CLI & run modes
+
+| Command | What it does |
+|---------|----------------|
+| `./bin/tars` | Automated **runtime demo** — hardcoded mission/plan, tri-agent loop, metrics. Does not read stdin. |
+| `./bin/tars chat` | Interactive REPL — stream LLM replies with session + recall. **No Executor / tool loop.** |
+| `./bin/tars report` | Metrics from SQLite (`--json` optional). |
+
+Unlike [mini-agent](./comparison.md), the default entry point is a showcase, not a chat-first agent loop. See [comparison](./comparison.md) for when to use each project.
+
+Configuration: copy `.env.example` → `.env` (Ollama default, `TARS_LLM_PROVIDER=stub` for offline). Details in the [root README](../../README.md).
+
+---
+
 ## Core Philosophy
 
 T.A.R.S. is neither a sycophantic assistant nor a cold calculator. He is a **tactical partner**:

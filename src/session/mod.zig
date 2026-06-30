@@ -4,6 +4,9 @@ const std = @import("std");
 const memory = @import("../memory/mod.zig");
 const metrics = @import("../metrics/collector.zig");
 
+pub const turn = @import("turn.zig");
+pub const Turn = turn.Turn;
+
 pub const Session = struct {
     id: []const u8,
     store: memory.store.Store,
@@ -49,9 +52,29 @@ pub const Session = struct {
         }
     }
 
+    /// Load last N turns parsed from JSON rows (newest window, ascending order).
+    pub fn loadRecentTurns(self: *const Session, allocator: std.mem.Allocator, limit: usize) ![]Turn {
+        const blob = try self.store.loadSessionTurnsJson(self.io, self.id, limit);
+        defer allocator.free(blob);
+        return turn.parseTurnsJson(allocator, blob);
+    }
+
     /// Load last N turns as tab-separated role\\tcontent blob for LLM context.
-    pub fn recentContext(self: *const Session, _: std.mem.Allocator, limit: usize) ![]const u8 {
+    pub fn recentContext(self: *const Session, allocator: std.mem.Allocator, limit: usize) ![]const u8 {
+        _ = allocator;
         return self.store.recentSessionTurns(self.io, self.id, limit);
+    }
+
+    pub fn turnCount(self: *const Session) !usize {
+        return self.store.countSessionTurns(self.io, self.id);
+    }
+
+    pub fn summary(self: *const Session) ![]const u8 {
+        return self.store.getSessionSummary(self.io, self.id);
+    }
+
+    pub fn setSummary(self: *const Session, text: []const u8) !void {
+        try self.store.setSessionSummary(self.io, self.id, text);
     }
 };
 

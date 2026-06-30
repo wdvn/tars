@@ -20,6 +20,20 @@ Dự án **tars** lấy cảm hứng từ T.A.R.S. (Tactical Autonomous Robot Sp
 
 ---
 
+## CLI & chế độ chạy
+
+| Lệnh | Mục đích |
+|------|----------|
+| `./bin/tars` | **Demo runtime tự động** — mission/plan cố định, vòng tri-agent, metrics. Không đọc stdin. |
+| `./bin/tars chat` | REPL tương tác — stream phản hồi LLM kèm session + recall. **Không chạy Executor / tool loop.** |
+| `./bin/tars report` | Truy vấn metrics từ SQLite (tuỳ chọn `--json`). |
+
+Khác [mini-agent](./comparison.md), lệnh mặc định là showcase kiến trúc, không phải vòng agent “chat rồi thực thi”. Xem [so sánh](./comparison.md) để chọn công cụ phù hợp.
+
+Cấu hình: copy `.env.example` → `.env` (mặc định Ollama, `TARS_LLM_PROVIDER=stub` khi offline). Chi tiết ở [README gốc](../../README.md).
+
+---
+
 ## Triết lý cốt lõi
 
 T.A.R.S. không phải trợ lý nịnh hót hay máy tính vô cảm. Anh ta là **đối tác chiến thuật**:

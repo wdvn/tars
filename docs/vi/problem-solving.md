@@ -247,6 +247,168 @@ Không spin vô hạn.
 
 ---
 
+## Case study — Session / memory là context cho LLM
+
+**Triệu chứng (operator):** `./bin/tars chat` trả lời như mỗi lượt là cuộc hội thoại mới — follow-up (*"use websearch to answer my question"*) bị hỏi lại câu gốc.
+
+**Mission:** Operator layer phải có **working memory có kiểm soát** cho mọi LLM completion — không chỉ ghi audit, không dump toàn bộ transcript.
+
+**Tham chiếu kiến trúc tars:** [§8.4 Các tầng memory](./architecture.md#84-các-tầng-memory) · Survey 2026: *Memory for Autonomous LLM Agents* (write–manage–read) · MemGPT/Letta (main vs external context) · Generative Agents (recency × relevance × importance).
+
+---
+
+### ORIENT — Symptom vs root cause
+
+| Quan sát | Kết luận |
+|----------|----------|
+| `session_turns` tăng mỗi lượt | **Write path** (persist) hoạt động |
+| Model không hiểu follow-up | **Read path** gần như trống — chỉ gửi 1 user message |
+| `recall()` được gọi | **Manage path** chưa nối — `hits` không vào prompt |
+| Kiến trúc §8.4 đã định nghĩa tầng memory | Implementation chat **bỏ qua** memory controller |
+
+**Root cause (đúng mức thiết kế):** thiếu **Memory Controller** — vòng **ghi → quản lý → đọc có chọn lọc** trước mỗi LLM call. Không phải thiếu một dòng `dupe` history.
+
+**Root cause (bug hiện tại):** `runChat` chỉ gửi:
+
+```zig
+.messages = &.{.{ .role = "user", .content = line }},
+```
+
+**Sai hướng fix (anti-pattern kiến trúc):** coi `session_turns` = toàn bộ context → parse hết → nhét vào `messages[]`. Đó là chat client ~2022; paper/agent gần đây **không** khuyến nghị dump full history làm giải pháp đích.
+
+---
+
+### ASSESS — Xu hướng paper vs tars
+
+Survey và MemGPT/Letta/Mem0 thống nhất: context window = **RAM hạn chế**; persistent store = **đĩa**; agent cần **chính sách** quyết định gì vào RAM mỗi turn.
+
+| Cơ chế (literature) | Vai trò | Map sang tars (§8.4) |
+|---------------------|---------|----------------------|
+| **Working / main context** | Turn gần + task state luôn in-context | Turn buffer + vài turn `session_turns` gần nhất |
+| **Context compression** | Summary rolling khi buffer tràn | Cột `sessions.summary` hoặc artifact `session_summary` |
+| **Retrieval-augmented recall** | Chỉ lấy chunk **liên quan query hiện tại** | `recall(query, k)` trên `episodic_memory` + **session turns** (vector hoặc hybrid) |
+| **Write filtering** | Không embed mọi turn — extract fact/salience | Sau turn: ghi episode có lọc (Monitor/Analyst block) |
+| **Manage / eviction** | Cắt cũ, merge mâu thuẫn, cap token | Memory Controller trước `CompletionRequest` |
+
+**Phân loại vấn đề:** Unknown có **boundary rõ** — kiến trúc doc đã chốt tầng; code chat chưa implement controller.
+
+**Risk disclosure:**
+
+```
+Rủi ro:        Dump full history → token cost, lost-in-the-middle, không scale
+Mức độ:        cao nếu coi đó là thiết kế cuối
+Mitigation:    Write–manage–read; hybrid retrieval; summary buffer
+Phương án nhanh: K turn gần nhất (chỉ unblock QA — không thay controller)
+```
+
+---
+
+### PLAN — Memory Controller cho `tars chat`
+
+#### P0 — Hotfix tạm (optional, không phải đích)
+
+Gửi **K turn raw gần nhất** (vd. K=6) vào `messages[]` để unblock follow-up. Ghi rõ trong code/docs: **technical debt**, sẽ thay bằng P1.
+
+#### P1 — Assemble context mỗi turn (target)
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ MAIN CONTEXT (in prompt / messages, có budget token)   │
+├─────────────────────────────────────────────────────────┤
+│ system: TARS_SYSTEM_FILE + parameter hints               │
+│ block [session_summary]: rolling summary (nếu có)        │
+│ block [recall]: top-k episodic + top-k session chunks    │
+│ messages[]: last K raw turns (operator ↔ analyst)        │
+│ user: current operator line (nếu chưa nằm trong K)      │
+└─────────────────────────────────────────────────────────┘
+         ▲                              │
+         │ read (retrieve + rank)       │ write (append + optional consolidate)
+         │                              ▼
+┌─────────────────┐  ┌──────────────────┐  ┌─────────────────────┐
+│ session_turns   │  │ episodic_memory  │  │ sessions.summary    │
+│ (recall buffer) │  │ (+ vectors)      │  │ (compressed past)   │
+└─────────────────┘  └──────────────────┘  └─────────────────────┘
+```
+
+**READ (trước LLM):**
+
+1. `q` = operator line hiện tại (hoặc line + 1 câu summary ngắn).
+2. **Session recall:** search/lấy M chunk liên quan từ `session_turns` (recency weight cao cho turn vừa rồi — follow-up *"use websearch for that"* cần turn trước).
+3. **Episodic recall:** `recall(q, k)` — mission/kinh nghiệm cũ (đã có code, chưa wire).
+4. **Working window:** K turn raw cuối (map `operator`→user, `analyst`→assistant).
+5. **Summary:** prepend nếu session dài hơn K + budget.
+6. **Rank & cap:** cắt theo `TARS_MAX_TOKENS` / char budget — ưu tiên: current line > K raw > recalled session > episodic > summary cũ.
+
+**WRITE (sau LLM):**
+
+1. `appendOperator` / `appendAgent` → `session_turns` (audit + recall corpus).
+2. (Phase 2) **Consolidate:** khi turn count > ngưỡng, Analyst block tóm tắt → update `session.summary` + `write_episode` salient facts → embed vào `episodic_memory`.
+
+**MANAGE (định kỳ hoặc khi tràn budget):**
+
+- Rolling summary (two-buffer: raw K + summary phần còn lại — pattern LangChain/MemGPT production).
+- Không ghi episodic cho noise (*"hello"*, *"sound good"*).
+
+#### P2 — Khớp tri-agent (sau chat)
+
+Cùng Memory Controller dùng cho Operator → Analyst ORIENT: `recall` + artifacts + session — một policy, nhiều entry point.
+
+#### P3 — Module gợi ý
+
+| Module | Trách nhiệm |
+|--------|-------------|
+| `src/memory/context.zig` (mới) | `assembleChatContext(allocator, store, session, query, budget) !ContextPack` |
+| `src/session/mod.zig` | Persist turns; optional `loadRecentRaw(K)` |
+| `src/main.zig` | `runChat` gọi controller, không tự build `messages` |
+| `src/memory/recall.zig` | Mở rộng: recall session chunks (recency + semantic) |
+
+---
+
+### ACT — Thứ tự triển khai
+
+| Phase | Việc | Đích |
+|-------|------|------|
+| **0** | Wire `hits` + K raw turns | Unblock follow-up nhanh |
+| **1** | `ContextPack` + rank/cap + inject vào request | Đúng hướng paper + §8.4 |
+| **2** | Rolling summary + write filter → episodic | Scale session dài |
+| **3** | Dùng chung controller cho autonomous loop | Một memory policy |
+
+---
+
+### VERIFY
+
+| Test | Pass criteria |
+|------|---------------|
+| **Follow-up** | *"weather Hanoi"* → *"websearch for that"* — không hỏi lại chủ đề |
+| **Clarify** | *"zig 0.16.0 change notes"* → *"public release notes"* — vẫn Zig |
+| **Long session** | 50+ turn: token/request **không** tăng tuyến tính vô hạn (summary/recall cap) |
+| **Recall quality** | Câu hỏi mission cũ: episodic hit xuất hiện trong `[recall]` block |
+| **Audit** | `session_turns` vẫn append-only đầy đủ dù main context đã cắt |
+
+**Evidence:** transcript + metric `llm.tokens.total` ổn định sau turn 20+; SQL `session_turns` count > số message gửi LLM (chứng minh không dump full).
+
+---
+
+### Anti-patterns riêng case này
+
+| Cấm | Lý do |
+|-----|-------|
+| Full `session_turns` → `messages[]` là thiết kế cuối | Không scale; trái survey + MemGPT |
+| Chỉ recall episodic, bỏ session | Mất follow-up trong phiên hiện tại |
+| Chỉ K raw, không manage | OK tạm P0; không thay consolidation |
+| Ghi episodic mọi turn | Noise, retrieval loãng (Mem0/Zep đều filter write) |
+| Chat bypass Safety/audit | Session vẫn append-only; context ≠ toàn bộ log |
+
+---
+
+### Handoff
+
+1. **Đích:** Memory Controller write–manage–read, khớp [architecture §8.4](./architecture.md).
+2. **Bug hiện tại:** read path trống — cần assemble, không chỉ persist.
+3. **P0 vs P1:** K raw turns = debt có nhãn; P1 = retrieval + summary + cap.
+
+---
+
 ## Anti-patterns (cấm)
 
 | Anti-pattern | Thay bằng |

@@ -3,7 +3,8 @@
 CREATE TABLE IF NOT EXISTS sessions (
   id          TEXT PRIMARY KEY,
   created_at  INTEGER NOT NULL,
-  updated_at  INTEGER NOT NULL
+  updated_at  INTEGER NOT NULL,
+  summary     TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS session_turns (

@@ -289,6 +289,8 @@ fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
     const system_prompt = if (runtime_cfg) |rc| if (rc.system_prompt.len > 0) rc.system_prompt else "T.A.R.S. crew analyst" else "T.A.R.S. crew analyst";
     const max_tokens = if (runtime_cfg) |rc| rc.max_tokens else 4096;
 
+    const ctx_cfg = try tars.memory.context.Config.load(gpa, io);
+
     try w.print("T.A.R.S. chat ({s}, session {s}). Empty line to exit.\n> ", .{ llm_ctx.kindName(), sess.id });
     try w.flush();
 
@@ -305,23 +307,20 @@ fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
 
         try sess.appendOperator(line);
 
-        // Recall is best-effort — empty slice on SQLite failure keeps chat usable.
-        const hits = tars.memory.recall.recall(gpa, &store, io, line, 2) catch |err| switch (err) {
-            error.SqliteFailed => &[_]tars.memory.recall.Hit{},
-            else => |e| return e,
-        };
-        defer if (hits.len > 0) tars.memory.recall.freeHitsSlice(gpa, hits);
+        var pack = try tars.memory.context.assembleChatContext(gpa, io, &store, &sess, line, system_prompt, ctx_cfg);
+        defer pack.deinit(gpa);
 
         const req = tars.llm.CompletionRequest{
             .config = .{ .max_tokens = max_tokens },
-            .system = system_prompt,
-            .messages = &.{.{ .role = "user", .content = line }},
+            .system = pack.system,
+            .messages = pack.messages,
             .output_schema = "{}",
         };
         const resp = try completeStreamWithFallback(gpa, io, w, &metrics_state, &provider, req, sink);
         defer gpa.free(resp.content_json);
 
         try sess.appendAgent("analyst", resp.content_json);
+        try tars.memory.context.manageSessionSummary(gpa, &sess, ctx_cfg);
         try w.print("\n> ", .{});
         try w.flush();
     }

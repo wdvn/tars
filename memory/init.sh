@@ -12,6 +12,7 @@ echo "Initializing tars memory at: $DB_PATH"
 
 sqlite3 "$DB_PATH" < "$ROOT/memory/schema.sql"
 sqlite3 "$DB_PATH" < "$ROOT/memory/schema_session.sql"
+sqlite3 "$DB_PATH" "ALTER TABLE sessions ADD COLUMN summary TEXT NOT NULL DEFAULT '';" 2>/dev/null || true
 sqlite3 "$DB_PATH" < "$ROOT/memory/schema_metrics.sql"
 sqlite3 "$DB_PATH" < "$ROOT/memory/schema_executor.sql"
 

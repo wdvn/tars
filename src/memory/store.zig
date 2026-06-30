@@ -234,7 +234,7 @@ const metrics = @import("../metrics/collector.zig");
         try self.runSqlite(io, sql);
     }
 
-    /// Returns lines: role\\tcontent (newest last, limited).
+    /// Returns lines: role|content (sqlite default sep; legacy helper).
     pub fn recentSessionTurns(
         self: *const Store,
         io: std.Io,
@@ -248,6 +248,73 @@ const metrics = @import("../metrics/collector.zig");
             \\WHERE session_id = '{s}'
             \\ORDER BY created_at ASC
             \\LIMIT {d};
+        , .{ esc_sid, limit });
+        defer self.allocator.free(sql);
+        return self.querySql(io, sql);
+    }
+
+    /// Count turns in a session (for summary fold triggers).
+    pub fn countSessionTurns(self: *const Store, io: std.Io, session_id: []const u8) StoreError!usize {
+        const esc_sid = escapeSql(self.allocator, session_id) catch return StoreError.SqliteFailed;
+        defer self.allocator.free(esc_sid);
+        const sql = try std.fmt.allocPrint(self.allocator,
+            \\SELECT COUNT(*) FROM session_turns WHERE session_id = '{s}';
+        , .{esc_sid});
+        defer self.allocator.free(sql);
+        const out = try self.querySql(io, sql);
+        defer self.allocator.free(out);
+        const trimmed = std.mem.trim(u8, out, " \r\n");
+        return std.fmt.parseInt(usize, trimmed, 10) catch 0;
+    }
+
+    /// Rolling session summary (compressed older turns for LLM context).
+    /// Caller owns returned slice (trimmed copy — safe to free with store allocator).
+    pub fn getSessionSummary(self: *const Store, io: std.Io, session_id: []const u8) StoreError![]const u8 {
+        const esc_sid = escapeSql(self.allocator, session_id) catch return StoreError.SqliteFailed;
+        defer self.allocator.free(esc_sid);
+        const sql = try std.fmt.allocPrint(self.allocator,
+            \\SELECT COALESCE(summary, '') FROM sessions WHERE id = '{s}';
+        , .{esc_sid});
+        defer self.allocator.free(sql);
+        const out = try self.querySql(io, sql);
+        defer self.allocator.free(out);
+        const trimmed = std.mem.trim(u8, out, " \r\n");
+        return self.allocator.dupe(u8, trimmed) catch return StoreError.OutOfMemory;
+    }
+
+    pub fn setSessionSummary(
+        self: *const Store,
+        io: std.Io,
+        session_id: []const u8,
+        summary: []const u8,
+    ) StoreError!void {
+        const esc_sid = escapeSql(self.allocator, session_id) catch return StoreError.SqliteFailed;
+        defer self.allocator.free(esc_sid);
+        const esc_sum = escapeSql(self.allocator, summary) catch return StoreError.SqliteFailed;
+        defer self.allocator.free(esc_sum);
+        const sql = try std.fmt.allocPrint(self.allocator,
+            \\UPDATE sessions SET summary = '{s}', updated_at = 0 WHERE id = '{s}';
+        , .{ esc_sum, esc_sid });
+        defer self.allocator.free(sql);
+        try self.runSqlite(io, sql);
+    }
+
+    /// Last N turns as one JSON object per line: {"role":"…","content":"…"} (ASC order).
+    pub fn loadSessionTurnsJson(
+        self: *const Store,
+        io: std.Io,
+        session_id: []const u8,
+        limit: usize,
+    ) StoreError![]const u8 {
+        const esc_sid = escapeSql(self.allocator, session_id) catch return StoreError.SqliteFailed;
+        defer self.allocator.free(esc_sid);
+        const sql = try std.fmt.allocPrint(self.allocator,
+            \\SELECT json_object('role', role, 'content', content) FROM (
+            \\  SELECT role, content, created_at, id FROM session_turns
+            \\  WHERE session_id = '{s}'
+            \\  ORDER BY created_at DESC, id DESC
+            \\  LIMIT {d}
+            \\) AS sub ORDER BY sub.created_at ASC, sub.id ASC;
         , .{ esc_sid, limit });
         defer self.allocator.free(sql);
         return self.querySql(io, sql);

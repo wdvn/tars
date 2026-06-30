@@ -245,6 +245,168 @@ No infinite spinning.
 
 ---
 
+## Case study — Session / memory as LLM context
+
+**Symptom (operator):** `./bin/tars chat` behaves like every turn is a fresh conversation — follow-ups (*"use websearch to answer my question"*) get *"please provide the question"*.
+
+**Mission:** The Operator layer needs **controlled working memory** for every LLM completion — not audit-only storage, not a full transcript dump.
+
+**References:** tars [§8.4 memory tiers](./architecture.md#84-memory-tiers) · 2026 survey *Memory for Autonomous LLM Agents* (write–manage–read) · MemGPT/Letta (main vs external context) · Generative Agents (recency × relevance × importance).
+
+---
+
+### ORIENT — Symptom vs root cause
+
+| Observation | Conclusion |
+|-------------|------------|
+| `session_turns` grows each turn | **Write path** (persist) works |
+| Model misses follow-ups | **Read path** is empty — only one user message sent |
+| `recall()` is called | **Manage path** unwired — `hits` never reach the prompt |
+| Architecture §8.4 defines tiers | Chat implementation **skips** the memory controller |
+
+**Root cause (design level):** missing **Memory Controller** — a selective **write → manage → read** loop before each LLM call. Not “missing one line of history dup.”
+
+**Root cause (current bug):** `runChat` sends only:
+
+```zig
+.messages = &.{.{ .role = "user", .content = line }},
+```
+
+**Wrong fix (architectural anti-pattern):** treat `session_turns` as the entire context → parse all → stuff into `messages[]`. That is a ~2022 chat client; recent agent memory work **does not** recommend unbounded full-history dump as the target design.
+
+---
+
+### ASSESS — Paper trends vs tars
+
+Surveys and MemGPT/Letta/Mem0 agree: the context window is **bounded RAM**; persistent stores are **disk**; agents need a **policy** for what enters RAM each turn.
+
+| Mechanism (literature) | Role | tars map (§8.4) |
+|--------------------------|------|-----------------|
+| **Working / main context** | Recent turns + task state always in-context | Turn buffer + last K `session_turns` |
+| **Context compression** | Rolling summary when buffer overflows | `sessions.summary` or `session_summary` artifact |
+| **Retrieval-augmented recall** | Only **query-relevant** chunks | `recall(query, k)` on `episodic_memory` + **session turns** |
+| **Write filtering** | Do not embed every turn — extract salient facts | Post-turn episode write (Analyst/Monitor block) |
+| **Manage / eviction** | Trim, merge conflicts, token cap | Memory Controller before `CompletionRequest` |
+
+**Classification:** Bounded unknown — architecture doc already defines tiers; chat code lacks the controller.
+
+**Risk disclosure:**
+
+```
+Risk:         Full-history dump → token cost, lost-in-the-middle, no scale
+Level:        high if treated as final design
+Mitigation:   Write–manage–read; hybrid retrieval; summary buffer
+Fast path:    Last K raw turns (QA unblock only — not the controller)
+```
+
+---
+
+### PLAN — Memory Controller for `tars chat`
+
+#### P0 — Temporary hotfix (optional, not the target)
+
+Send **last K raw turns** (e.g. K=6) in `messages[]` to unblock follow-ups. Mark clearly as **technical debt** superseded by P1.
+
+#### P1 — Per-turn context assembly (target)
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ MAIN CONTEXT (prompt / messages, token budget)           │
+├─────────────────────────────────────────────────────────┤
+│ system: TARS_SYSTEM_FILE + parameter hints               │
+│ block [session_summary]: rolling summary (if any)        │
+│ block [recall]: top-k episodic + top-k session chunks    │
+│ messages[]: last K raw turns (operator ↔ analyst)        │
+│ user: current operator line (if not already in K)        │
+└─────────────────────────────────────────────────────────┘
+         ▲                              │
+         │ read (retrieve + rank)       │ write (append + optional consolidate)
+         │                              ▼
+┌─────────────────┐  ┌──────────────────┐  ┌─────────────────────┐
+│ session_turns   │  │ episodic_memory  │  │ sessions.summary    │
+│ (recall buffer) │  │ (+ vectors)      │  │ (compressed past)   │
+└─────────────────┘  └──────────────────┘  └─────────────────────┘
+```
+
+**READ (before LLM):**
+
+1. `q` = current operator line.
+2. **Session recall:** fetch M relevant chunks from `session_turns` (high recency weight for the previous turn — needed for *"use websearch for that"*).
+3. **Episodic recall:** `recall(q, k)` — past missions (code exists, not wired).
+4. **Working window:** last K raw turns (map `operator`→user, `analyst`→assistant).
+5. **Summary:** prepend when session length exceeds K + budget.
+6. **Rank & cap:** trim by `TARS_MAX_TOKENS` — priority: current line > K raw > recalled session > episodic > old summary.
+
+**WRITE (after LLM):**
+
+1. `appendOperator` / `appendAgent` → `session_turns` (audit + recall corpus).
+2. (Phase 2) **Consolidate:** when turn count exceeds threshold, Analyst summarizes → update `session.summary` + filtered `write_episode` → embed in `episodic_memory`.
+
+**MANAGE (on overflow or schedule):**
+
+- Rolling summary (two-buffer: raw K + summary for the rest — MemGPT/LangChain production pattern).
+- Skip episodic writes for noise (*"hello"*, *"sound good"*).
+
+#### P2 — Align with tri-agent (after chat)
+
+Same Memory Controller for Operator → Analyst ORIENT: one policy, multiple entry points.
+
+#### P3 — Suggested modules
+
+| Module | Responsibility |
+|--------|----------------|
+| `src/memory/context.zig` (new) | `assembleChatContext(allocator, store, session, query, budget) !ContextPack` |
+| `src/session/mod.zig` | Persist turns; optional `loadRecentRaw(K)` |
+| `src/main.zig` | `runChat` calls controller, does not hand-build `messages` |
+| `src/memory/recall.zig` | Extend: session chunk recall (recency + semantic) |
+
+---
+
+### ACT — Rollout order
+
+| Phase | Work | Goal |
+|-------|------|------|
+| **0** | Wire `hits` + K raw turns | Fast follow-up fix |
+| **1** | `ContextPack` + rank/cap + request inject | Paper-aligned + §8.4 |
+| **2** | Rolling summary + write filter → episodic | Long sessions |
+| **3** | Shared controller for autonomous loop | Single memory policy |
+
+---
+
+### VERIFY
+
+| Test | Pass criteria |
+|------|---------------|
+| **Follow-up** | *"weather Hanoi"* → *"websearch for that"* — no re-ask |
+| **Clarify** | *"zig 0.16.0 change notes"* → *"public release notes"* — still Zig |
+| **Long session** | 50+ turns: tokens/request **not** linear unbounded growth |
+| **Recall quality** | Old mission topics appear in `[recall]` block when relevant |
+| **Audit** | Full `session_turns` append-only even when main context is trimmed |
+
+**Evidence:** transcript + stable `llm.tokens.total` after turn 20+; SQL turn count > messages sent (proves no full dump).
+
+---
+
+### Case-specific anti-patterns
+
+| Forbidden | Why |
+|-----------|-----|
+| Full `session_turns` → `messages[]` as final design | Does not scale; contradicts survey + MemGPT |
+| Episodic recall only, no session | Loses in-session follow-ups |
+| K raw only, no manage | OK for P0; not a substitute for consolidation |
+| Episodic write every turn | Noise dilutes retrieval (Mem0/Zep filter writes) |
+| Chat bypasses audit | Session stays append-only; context ≠ full log |
+
+---
+
+### Handoff
+
+1. **Target:** Memory Controller write–manage–read, aligned with [architecture §8.4](./architecture.md).
+2. **Current bug:** empty read path — need assembly, not persist-only.
+3. **P0 vs P1:** K raw turns = labeled debt; P1 = retrieval + summary + cap.
+
+---
+
 ## Anti-patterns
 
 | Anti-pattern | Replace with |
