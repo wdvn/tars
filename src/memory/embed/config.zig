@@ -3,7 +3,9 @@
 const std = @import("std");
 const llm_env = @import("../../llm/env.zig");
 
+pub const default_provider = "ollama";
 pub const default_model = "qwen3-embedding:0.6b";
+pub const default_host = "http://127.0.0.1:11434";
 pub const default_dim: u32 = 512;
 pub const default_instruction =
     \\Given a TARS mission goal and agent run context, retrieve relevant episodic memories from past missions.
@@ -28,13 +30,13 @@ pub const Config = struct {
         try llm_env.initDotEnv(allocator, io);
 
         var cfg: Config = .{
-            .provider = "auto",
+            .provider = default_provider,
             .model = default_model,
             .output_dim = default_dim,
             .instruction = default_instruction,
             .max_chars = default_max_chars,
             .auto_pull = true,
-            .ollama_host = "http://127.0.0.1:11434",
+            .ollama_host = default_host,
         };
 
         if (try llm_env.get(allocator, io, "TARS_EMBED_PROVIDER")) |raw| {
@@ -75,7 +77,7 @@ pub const Config = struct {
             cfg.auto_pull = !std.mem.eql(u8, t, "0") and !std.mem.eql(u8, t, "false");
         }
 
-        const host_raw = try llm_env.getOr(allocator, io, "OLLAMA_HOST", "http://127.0.0.1:11434");
+        const host_raw = try llm_env.getOr(allocator, io, "OLLAMA_HOST", default_host);
         defer allocator.free(host_raw);
         cfg.host_owned = try llm_env.trimSlash(allocator, host_raw);
         cfg.ollama_host = cfg.host_owned.?;
@@ -92,9 +94,11 @@ pub const Config = struct {
     }
 
     pub fn resolvedProvider(self: *const Config) []const u8 {
-        if (!std.mem.eql(u8, self.provider, "auto")) return self.provider;
-        if (self.model_owned != null) return "ollama";
-        return "hash";
+        if (std.mem.eql(u8, self.provider, "auto")) {
+            if (self.model_owned != null) return "ollama";
+            return default_provider;
+        }
+        return self.provider;
     }
 
     pub fn dimensionForProvider(self: *const Config, provider: []const u8) u32 {
