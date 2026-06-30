@@ -282,12 +282,11 @@ fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
     var llm_ctx = try tars.llm.resolve(gpa, io);
     defer llm_ctx.deinit();
     defer tars.llm.deinitRuntime(gpa);
-    var provider = tars.metrics.instrumentProvider(&metrics_state, io, llm_ctx.provider());
+    const provider = tars.metrics.instrumentProvider(&metrics_state, io, llm_ctx.provider());
     const sink = tars.stream.resolveStdout(gpa, io) catch tars.stream.StdoutSink.init();
 
     const runtime_cfg = tars.llm.runtimeConfig();
     const system_prompt = if (runtime_cfg) |rc| if (rc.system_prompt.len > 0) rc.system_prompt else "T.A.R.S. crew analyst" else "T.A.R.S. crew analyst";
-    const max_tokens = if (runtime_cfg) |rc| rc.max_tokens else 4096;
 
     const ctx_cfg = try tars.memory.context.Config.load(gpa, io);
 
@@ -310,16 +309,15 @@ fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
         var pack = try tars.memory.context.assembleChatContext(gpa, io, &store, &sess, line, system_prompt, ctx_cfg);
         defer pack.deinit(gpa);
 
-        const req = tars.llm.CompletionRequest{
-            .config = .{ .max_tokens = max_tokens },
-            .system = pack.system,
-            .messages = pack.messages,
-            .output_schema = "{}",
-        };
-        const resp = try completeStreamWithFallback(gpa, io, w, &metrics_state, &provider, req, sink);
-        defer gpa.free(resp.content_json);
+        var turn = try tars.core.chat.runTurn(gpa, io, &store, &sess, provider, sink, line, &pack, .{
+            .repo_root = ".",
+        });
+        defer turn.deinit(gpa);
 
-        try sess.appendAgent("analyst", resp.content_json);
+        if (!turn.streamed) {
+            try w.print("{s}", .{turn.response});
+        }
+        try sess.appendAgent("analyst", turn.response);
         try tars.memory.context.manageSessionSummary(gpa, &sess, ctx_cfg);
         try w.print("\n> ", .{});
         try w.flush();

@@ -86,6 +86,14 @@ const metrics = @import("../metrics/collector.zig");
         }
     }
 
+    /// Run SQL and return an owned, trimmed copy (frees raw sqlite3 stdout internally).
+    pub fn querySqlText(self: *const Store, io: std.Io, sql: []const u8) StoreError![]const u8 {
+        const raw = try self.querySql(io, sql);
+        defer self.allocator.free(raw);
+        const trimmed = std.mem.trim(u8, raw, " \r\n");
+        return self.allocator.dupe(u8, trimmed) catch return StoreError.OutOfMemory;
+    }
+
     /// Double single-quotes so user content survives string interpolation in SQL.
     fn escapeSql(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
         var out: std.ArrayList(u8) = .empty;
@@ -261,10 +269,9 @@ const metrics = @import("../metrics/collector.zig");
             \\SELECT COUNT(*) FROM session_turns WHERE session_id = '{s}';
         , .{esc_sid});
         defer self.allocator.free(sql);
-        const out = try self.querySql(io, sql);
+        const out = try self.querySqlText(io, sql);
         defer self.allocator.free(out);
-        const trimmed = std.mem.trim(u8, out, " \r\n");
-        return std.fmt.parseInt(usize, trimmed, 10) catch 0;
+        return std.fmt.parseInt(usize, out, 10) catch 0;
     }
 
     /// Rolling session summary (compressed older turns for LLM context).
@@ -276,10 +283,7 @@ const metrics = @import("../metrics/collector.zig");
             \\SELECT COALESCE(summary, '') FROM sessions WHERE id = '{s}';
         , .{esc_sid});
         defer self.allocator.free(sql);
-        const out = try self.querySql(io, sql);
-        defer self.allocator.free(out);
-        const trimmed = std.mem.trim(u8, out, " \r\n");
-        return self.allocator.dupe(u8, trimmed) catch return StoreError.OutOfMemory;
+        return self.querySqlText(io, sql);
     }
 
     pub fn setSessionSummary(
