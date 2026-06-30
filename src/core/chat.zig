@@ -40,8 +40,9 @@ pub const TurnResult = struct {
 };
 
 const verify_instruction =
-    \\Answer the operator using ONLY [verified_evidence] and memory context blocks.
-    \\If evidence is missing or insufficient, say honestly that you cannot verify — do not invent facts.
+    \\Answer the operator using [verified_evidence] and memory context blocks.
+    \\If evidence is present, stick strictly to the evidence and do not invent facts.
+    \\If no tools were executed, answer the query naturally using conversational context or general knowledge.
 ;
 
 /// Run one operator turn: assemble context → OODA loop → VERIFY → grounded reply.
@@ -190,7 +191,6 @@ pub fn runTurn(
     return .{ .response = synth.content, .verified = verified, .streamed = synth.streamed };
 }
 
-
 fn buildEvidence(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -337,7 +337,6 @@ fn jsonQuote(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     try out.append(allocator, '"');
     return out.toOwnedSlice(allocator);
 }
-
 
 fn freeBlockResults(allocator: std.mem.Allocator, results: []types.BlockResult) void {
     for (results) |r| allocator.free(r.payload_json);
