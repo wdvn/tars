@@ -21,6 +21,7 @@ pub const AnthropicProvider = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
 
+    /// Load Anthropic credentials and model defaults from env.
     pub fn create(allocator: std.mem.Allocator, io: std.Io) LlmError!AnthropicProvider {
         const api_key = try env.get(allocator, io, "ANTHROPIC_API_KEY") orelse return LlmError.MissingApiKey;
         const base_raw = try env.getOr(allocator, io, "ANTHROPIC_BASE_URL", "https://api.anthropic.com");
@@ -37,12 +38,14 @@ pub const AnthropicProvider = struct {
         };
     }
 
+    /// Free owned API key, base URL, and model strings.
     pub fn deinit(self: *AnthropicProvider) void {
         self.allocator.free(self.api_key);
         self.allocator.free(self.base_url);
         self.allocator.free(self.default_model);
     }
 
+    /// Wrap this provider in the generic llm.Provider vtable.
     pub fn provider(self: *AnthropicProvider) llm.Provider {
         return .{
             .ptr = @ptrCast(self),
@@ -51,10 +54,12 @@ pub const AnthropicProvider = struct {
         };
     }
 
+    /// Anthropic Messages API endpoint under configurable base URL.
     fn endpoint(self: *const AnthropicProvider, allocator: std.mem.Allocator) ![]const u8 {
         return std.fmt.allocPrint(allocator, "{s}/v1/messages", .{self.base_url});
     }
 
+    /// Build Messages API JSON: system is top-level; roles mapped to user/assistant only.
     fn buildBody(
         self: *const AnthropicProvider,
         allocator: std.mem.Allocator,
@@ -101,6 +106,7 @@ pub const AnthropicProvider = struct {
         });
     }
 
+    /// Non-stream POST; extract text block from content[0].text.
     fn complete(
         ptr: *anyopaque,
         allocator: std.mem.Allocator,
@@ -134,6 +140,7 @@ pub const AnthropicProvider = struct {
         };
     }
 
+    /// Stream SSE deltas; accumulate text and forward tokens to sink.
     fn streamComplete(
         ptr: *anyopaque,
         allocator: std.mem.Allocator,
@@ -177,6 +184,7 @@ pub const AnthropicProvider = struct {
     }
 };
 
+/// Anthropic only accepts user/assistant — map anything else to user.
 fn mapRole(role: []const u8) []const u8 {
     if (std.mem.eql(u8, role, "assistant")) return "assistant";
     return "user";
@@ -189,6 +197,7 @@ const StreamCtx = struct {
     acc: *std.ArrayList(u8),
 };
 
+/// Parse Anthropic SSE data line and extract incremental text field.
 fn onAnthropicLine(ctx_ptr: *anyopaque, line: []const u8) !void {
     const ctx: *StreamCtx = @ptrCast(@alignCast(ctx_ptr));
     if (!std.mem.startsWith(u8, line, "data: ")) return;

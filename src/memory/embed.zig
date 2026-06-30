@@ -5,6 +5,7 @@ const std = @import("std");
 
 pub const dimension: u32 = 384;
 
+/// Deterministic 384-dim bag-of-words embedding for local semantic recall.
 pub fn embed(allocator: std.mem.Allocator, text: []const u8) ![]f32 {
     // Hash tokens into a sparse bag-of-words vector, then L2-normalize.
     var vec = try allocator.alloc(f32, dimension);
@@ -40,6 +41,7 @@ pub fn cosineSimilarity(a: []const f32, b: []const f32) f32 {
     return dot / (@sqrt(na) * @sqrt(nb));
 }
 
+/// Serialize float vector to JSON array for storage in episode meta.
 pub fn serializeJson(allocator: std.mem.Allocator, vec: []const f32) ![]const u8 {
     var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(allocator);

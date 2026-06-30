@@ -2,7 +2,7 @@ const std = @import("std");
 const types = @import("../../../types.zig");
 const action = @import("block.zig");
 
-/// Skeleton: records intent; does not write files yet.
+/// File edit block — skeleton records path intent without applying patches yet.
 pub fn block() action.Block {
     return .{
         .id = "file_editor",
@@ -12,6 +12,7 @@ pub fn block() action.Block {
     };
 }
 
+/// Return stub JSON acknowledging path — real patch application not implemented.
 fn run(
     ptr: *anyopaque,
     allocator: std.mem.Allocator,

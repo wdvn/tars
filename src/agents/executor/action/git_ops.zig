@@ -2,7 +2,7 @@ const std = @import("std");
 const types = @import("../../../types.zig");
 const action = @import("block.zig");
 
-/// Read-only git ops in skeleton: status, diff, log.
+/// Git action block — read-only subcommands (status, diff, log) in skeleton.
 pub fn block() action.Block {
     return .{
         .id = "git_ops",
@@ -12,6 +12,7 @@ pub fn block() action.Block {
     };
 }
 
+/// Run git with tokenized subcommand argv; success follows process exit code.
 fn run(
     ptr: *anyopaque,
     allocator: std.mem.Allocator,
@@ -49,6 +50,7 @@ fn run(
     };
 }
 
+/// Split subcommand on spaces into git argv slice (caller owns returned slice).
 fn buildArgv(allocator: std.mem.Allocator, subcommand: []const u8) ![]const []const u8 {
     var list: std.ArrayList([]const u8) = .empty;
     errdefer list.deinit(allocator);

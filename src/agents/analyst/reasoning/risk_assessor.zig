@@ -12,6 +12,7 @@ const system_prompt =
     \\Do not sugarcoat. Include mitigation and plan B. Output strict JSON only.
 ;
 
+/// Register ASSESS-phase risk block (blast radius, mitigation, plan B).
 pub fn block() rb.Block {
     return .{
         .id = "risk_assessor",
@@ -21,6 +22,7 @@ pub fn block() rb.Block {
     };
 }
 
+/// Call LLM with risk schema; very low temperature for conservative estimates.
 fn invoke(
     ptr: *anyopaque,
     allocator: std.mem.Allocator,

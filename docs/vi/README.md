@@ -16,6 +16,7 @@ Dự án **tars** lấy cảm hứng từ T.A.R.S. (Tactical Autonomous Robot Sp
 | [Tham số cốt lõi](./parameters.md) | Honesty, humor và các tham số điều chỉnh hành vi |
 | [Quy tắc hành vi](./behavior.md) | Cách giao tiếp, đạo đức làm việc, ranh giới |
 | [Quy tắc xử lý vấn đề](./problem-solving.md) | Quy trình phân tích, ưu tiên, hành động dưới áp lực |
+| [So sánh: tars vs. mini-agent](./comparison.md) | So sánh kiến trúc, khả năng và trường hợp dùng |
 
 ---
 

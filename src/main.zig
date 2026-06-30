@@ -1,6 +1,7 @@
 const std = @import("std");
 const tars = @import("tars");
 
+/// CLI entry: `tars` (demo), `tars chat`, or `tars report [--json]`.
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const io = init.io;
@@ -83,7 +84,7 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
     try initMetrics(gpa, "demo", &metrics_state);
 
     const mission_id = "demo-runtime";
-    const sink = tars.stream.StdoutSink.init();
+    const sink = tars.stream.resolveStdout(gpa, io) catch tars.stream.StdoutSink.init();
 
     var stdout_buffer: [8192]u8 = undefined;
     var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
@@ -94,6 +95,7 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
 
     try w.print("[1] Streaming LLM\n", .{});
     try w.flush();
+    // Resolve provider from env (OpenAI / Anthropic / stub) and wrap with metrics.
     var llm_ctx = try tars.llm.resolve(gpa, io);
     defer llm_ctx.deinit();
     const provider = tars.metrics.instrumentProvider(&metrics_state, io, llm_ctx.provider());
@@ -120,6 +122,7 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
     try w.print("  grep MissionContext: {d} byte(s)\n\n", .{grep_hits.len});
 
     try w.print("[3] Episodic memory + semantic recall\n", .{});
+    // Seed two episodes so recall has vectors to rank against the query.
     try tars.core.mission.writeEpisodeFromOutcome(gpa, &store, io, mission_id, "analyst", "Tri-agent skeleton uses ORIENT ASSESS PLAN ACT VERIFY phases", &.{ "architecture", "demo" });
     try tars.core.mission.writeEpisodeFromOutcome(gpa, &store, io, mission_id, "monitor", "Verify phase checks executor output and publishes handoff", &.{ "verify" });
 
@@ -137,21 +140,27 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
     defer gpa.free(ctx_lines);
     try w.print("  session {s}: {d} byte(s) context\n\n", .{ sess.id, ctx_lines.len });
 
-    try w.print("[5] MCP bridge\n", .{});
+    try w.print("[5] MCP bridge (JSON-RPC)\n", .{});
     if (tars.mcp.client.Client.fromEnv(gpa, io)) |client| {
         defer client.deinit();
         const tools = client.listTools(gpa, io) catch |err| switch (err) {
             else => try tars.mcp.client.stubCall(gpa, "list"),
         };
         defer gpa.free(tools);
-        try w.print("  MCP tools: {d} byte(s)\n\n", .{tools.len});
+        try w.print("  MCP tools/list: {d} byte(s)\n\n", .{tools.len});
     } else {
-        const stub = try tars.mcp.client.stubCall(gpa, "filesystem/read");
+        const stub = try tars.mcp.client.stubCall(gpa, "filesystem__read");
         defer gpa.free(stub);
-        try w.print("  {s} (set TARS_MCP_CMD for live MCP)\n\n", .{stub});
+        try w.print("  {s} (set TARS_MCP_CMD for live JSON-RPC MCP)\n\n", .{stub});
     }
 
+    try w.print("[5b] Skills (SKILL.md)\n", .{});
+    const skill_list = tars.skills.loader.listSkills(gpa, io) catch "{}";
+    defer gpa.free(skill_list);
+    try w.print("  {s}\n\n", .{skill_list});
+
     try w.print("[6] Autonomous loop\n", .{});
+    // Pass perception evidence into mission ctx; loop may replace it during ORIENT.
     var ctx = tars.core.mission.defaultContext(mission_id, "Runtime capability demo");
     ctx.evidence = evidence;
 
@@ -159,6 +168,8 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
         .mission_id = mission_id,
         .steps = &.{
             .{ .kind = .shell, .payload = "echo tars-loop-ok" },
+            .{ .kind = .skill, .payload = "list" },
+            .{ .kind = .mcp, .payload = "filesystem__read:{\"path\":\"build.zig\"}" },
             .{ .kind = .git, .payload = "status --short" },
         },
         .rollback = "",
@@ -205,7 +216,7 @@ fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
     var llm_ctx = try tars.llm.resolve(gpa, io);
     defer llm_ctx.deinit();
     const provider = tars.metrics.instrumentProvider(&metrics_state, io, llm_ctx.provider());
-    const sink = tars.stream.StdoutSink.init();
+    const sink = tars.stream.resolveStdout(gpa, io) catch tars.stream.StdoutSink.init();
 
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
@@ -227,6 +238,7 @@ fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
 
         try sess.appendOperator(line);
 
+        // Recall is best-effort — empty slice on SQLite failure keeps chat usable.
         const hits = tars.memory.recall.recall(gpa, &store, io, line, 2) catch |err| switch (err) {
             error.SqliteFailed => &[_]tars.memory.recall.Hit{},
             else => |e| return e,

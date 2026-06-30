@@ -16,6 +16,7 @@ pub const Block = struct {
         ctx: *const types.MissionContext,
     ) types.BlockError!types.BlockResult,
 
+    /// Dispatch to block-specific invokeFn with mission context and LLM provider.
     pub fn invoke(
         self: Block,
         allocator: std.mem.Allocator,
@@ -26,6 +27,7 @@ pub const Block = struct {
     }
 };
 
+/// Stitch block template, mission fields, evidence, and JSON schema into one user prompt.
 pub fn assemblePrompt(
     allocator: std.mem.Allocator,
     template: []const u8,

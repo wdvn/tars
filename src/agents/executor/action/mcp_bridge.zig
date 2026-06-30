@@ -4,7 +4,7 @@ const action = @import("block.zig");
 const mcp = @import("../../../mcp/mod.zig");
 const metrics = @import("../../../metrics/collector.zig");
 
-/// MCP bridge — calls external MCP server when TARS_MCP_CMD is set.
+/// MCP action block — JSON-RPC tools/call via TARS_MCP_CMD.
 pub fn block() action.Block {
     return .{
         .id = "mcp_bridge",
@@ -14,6 +14,7 @@ pub fn block() action.Block {
     };
 }
 
+/// Payload: `tool_name` or `tool_name:{"arg":"value"}` (supports `server__tool` prefix).
 fn run(
     ptr: *anyopaque,
     allocator: std.mem.Allocator,
@@ -26,7 +27,7 @@ fn run(
     const payload = if (std.mem.indexOf(u8, act.payload, ":")) |colon| blk: {
         const tool = act.payload[0..colon];
         const args = std.mem.trim(u8, act.payload[colon + 1 ..], " ");
-        break :blk .{ tool, args };
+        break :blk .{ tool, if (args.len > 0) args else "{}" };
     } else .{ act.payload, "{}" };
 
     const stdout = if (mcp.client.Client.fromEnv(allocator, io)) |client| blk: {

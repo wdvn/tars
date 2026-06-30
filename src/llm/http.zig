@@ -18,6 +18,7 @@ pub const Response = struct {
     body: []const u8,
 };
 
+/// POST via curl; body written to temp file to avoid shell escaping limits.
 pub fn post(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -80,6 +81,7 @@ pub fn post(
 
 pub const StreamChunkFn = *const fn (ctx: *anyopaque, chunk: []const u8) anyerror!void;
 
+/// Spawn curl with -N, invoke onChunk per SSE line, then parse trailing HTTP status.
 pub fn postStream(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -181,6 +183,7 @@ pub fn postStream(
     };
 }
 
+/// Split curl -w trailer ---TARS_HTTP:NNN from body; default 200 if marker missing.
 fn splitStatus(allocator: std.mem.Allocator, raw: []u8) SplitError!Response {
     const marker = "---TARS_HTTP:";
     if (std.mem.lastIndexOf(u8, raw, marker)) |idx| {
@@ -194,6 +197,7 @@ fn splitStatus(allocator: std.mem.Allocator, raw: []u8) SplitError!Response {
     return .{ .status = 200, .body = body };
 }
 
+/// Write JSON body via base64+python to handle arbitrary bytes without shell injection.
 fn writeTempBody(allocator: std.mem.Allocator, io: std.Io, body: []const u8) HttpError![]const u8 {
     const path = try std.fmt.allocPrint(allocator, "/tmp/tars-llm-{x}.json", .{std.hash.Wyhash.hash(0, body)});
     const enc_size = std.base64.standard.Encoder.calcSize(body.len);
@@ -217,6 +221,7 @@ fn writeTempBody(allocator: std.mem.Allocator, io: std.Io, body: []const u8) Htt
     return path;
 }
 
+/// Best-effort delete of temp request body after curl completes.
 fn cleanupTemp(allocator: std.mem.Allocator, io: std.Io, path: []const u8) void {
     _ = std.process.run(allocator, io, .{ .argv = &.{ "rm", "-f", path } }) catch {};
     allocator.free(path);

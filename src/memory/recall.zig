@@ -96,6 +96,7 @@ fn rankLocal(allocator: std.mem.Allocator, rows_json: []const u8, query_vec: []c
     return out;
 }
 
+/// Release content and meta owned by each Hit (slice elements only, not the slice itself).
 pub fn freeHits(allocator: std.mem.Allocator, hits: []const Hit) void {
     for (hits) |h| {
         allocator.free(h.content);
@@ -103,11 +104,13 @@ pub fn freeHits(allocator: std.mem.Allocator, hits: []const Hit) void {
     }
 }
 
+/// Free Hit payloads then the slice returned by recall().
 pub fn freeHitsSlice(allocator: std.mem.Allocator, hits: []const Hit) void {
     freeHits(allocator, hits);
     allocator.free(hits);
 }
 
+/// Roll back a partial rankLocal on error — free all hits and destroy the list.
 fn freeHitList(allocator: std.mem.Allocator, list: *std.ArrayList(Hit)) void {
     for (list.items) |h| {
         allocator.free(h.content);
@@ -116,6 +119,7 @@ fn freeHitList(allocator: std.mem.Allocator, list: *std.ArrayList(Hit)) void {
     list.deinit(allocator);
 }
 
+/// Sort comparator: higher cosine score ranks first.
 fn hitLess(_: void, a: Hit, b: Hit) bool {
     return a.score > b.score;
 }

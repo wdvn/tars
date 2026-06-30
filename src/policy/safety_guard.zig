@@ -16,6 +16,7 @@ pub const DenyReason = struct {
 };
 
 pub const Guard = struct {
+    /// Gate action through P5 boundaries; increment denial metric on reject.
     pub fn evaluate(action: types.Action) Verdict {
         metrics.gInc("safety.guard.evaluations", 1);
         const verdict = evaluateInner(action);
@@ -26,16 +27,19 @@ pub const Guard = struct {
         return verdict;
     }
 
+    /// Route by action kind — verify is read-only; MCP rules deferred.
     fn evaluateInner(action: types.Action) Verdict {
         switch (action.kind) {
             .shell => return evaluateShell(action.payload),
             .file_edit => return evaluateFileEdit(action.payload),
             .git => return evaluateGit(action.payload),
             .verify => return .allow, // read-only by design
-            .mcp => return .allow, // TODO: MCP-specific rules
+            .mcp => return .allow, // MCP JSON-RPC tools via TARS_MCP_CMD
+            .skill => return .allow, // read-only SKILL.md load
         }
     }
 
+    /// Pattern-match shell command (lowercased) against irreversible/destructive signatures.
     fn evaluateShell(command: []const u8) Verdict {
         const lower = std.ascii.allocLowerString(std.heap.page_allocator, command) catch command;
         defer if (lower.ptr != command.ptr) std.heap.page_allocator.free(lower);
@@ -96,6 +100,7 @@ pub const Guard = struct {
         return .allow;
     }
 
+    /// Block edits touching .env unless explicitly gitignore-related.
     fn evaluateFileEdit(payload: []const u8) Verdict {
         if (std.mem.indexOf(u8, payload, ".env") != null and
             std.mem.indexOf(u8, payload, "gitignore") == null)
@@ -109,6 +114,7 @@ pub const Guard = struct {
         return .allow;
     }
 
+    /// Deny force-push and unsolicited commits (operator must approve commits).
     fn evaluateGit(subcommand: []const u8) Verdict {
         if (std.mem.startsWith(u8, subcommand, "push") and
             (std.mem.indexOf(u8, subcommand, "--force") != null or std.mem.indexOf(u8, subcommand, " -f") != null))
@@ -129,6 +135,7 @@ pub const Guard = struct {
         return .allow;
     }
 
+    /// Substring scan for any forbidden needle in command text.
     fn containsAny(haystack: []const u8, needles: []const []const u8) bool {
         for (needles) |n| {
             if (std.mem.indexOf(u8, haystack, n) != null) return true;
@@ -136,6 +143,7 @@ pub const Guard = struct {
         return false;
     }
 
+    /// Construct deny verdict with boundary id, reason, and suggested alternative.
     fn deny(boundary: []const u8, reason: []const u8, alternative: []const u8) Verdict {
         return .{ .deny = .{
             .boundary = boundary,

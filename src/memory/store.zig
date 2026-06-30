@@ -24,6 +24,7 @@ pub const Store = struct {
     db_path: []const u8,
     allocator: std.mem.Allocator,
 
+    /// Own a copy of db_path so callers can pass stack literals safely.
     pub fn init(allocator: std.mem.Allocator, db_path: []const u8) !Store {
         return .{
             .db_path = try allocator.dupe(u8, db_path),
@@ -31,6 +32,7 @@ pub const Store = struct {
         };
     }
 
+    /// Release heap-owned db_path; SQLite file is left on disk.
     pub fn deinit(self: *Store) void {
         self.allocator.free(self.db_path);
     }
@@ -50,6 +52,7 @@ pub const Store = struct {
         }
     }
 
+    /// Fire-and-forget SQL — discards stdout for INSERT/UPDATE paths.
     fn runSqlite(self: *const Store, io: std.Io, sql: []const u8) StoreError!void {
         _ = try self.querySql(io, sql);
     }
@@ -83,6 +86,7 @@ const metrics = @import("../metrics/collector.zig");
         }
     }
 
+    /// Double single-quotes so user content survives string interpolation in SQL.
     fn escapeSql(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
         var out: std.ArrayList(u8) = .empty;
         errdefer out.deinit(allocator);
@@ -92,6 +96,7 @@ const metrics = @import("../metrics/collector.zig");
         return out.toOwnedSlice(allocator);
     }
 
+    /// Persist an agent reasoning/execution artifact keyed by mission phase.
     pub fn writeArtifact(
         self: *const Store,
         io: std.Io,
@@ -110,6 +115,7 @@ const metrics = @import("../metrics/collector.zig");
         try self.runSqlite(io, sql);
     }
 
+    /// Append an immutable audit row for operator traceability and Monitor reports.
     pub fn appendAudit(
         self: *const Store,
         io: std.Io,
@@ -127,6 +133,7 @@ const metrics = @import("../metrics/collector.zig");
         try self.runSqlite(io, sql);
     }
 
+    /// Record inter-agent bus traffic (from → to) for replay and debugging.
     pub fn publishBusEvent(
         self: *const Store,
         io: std.Io,
@@ -145,6 +152,7 @@ const metrics = @import("../metrics/collector.zig");
         try self.runSqlite(io, sql);
     }
 
+    /// Path to external recall SQL template (vector search when extension loaded).
     pub fn recallQueryPath() []const u8 {
         return query_recall_path;
     }
@@ -190,6 +198,7 @@ const metrics = @import("../metrics/collector.zig");
         return self.querySql(io, sql);
     }
 
+    /// Idempotent session row — INSERT OR IGNORE avoids duplicate operator sessions.
     pub fn createSession(self: *const Store, io: std.Io, session_id: []const u8, created_at: i64) StoreError!void {
         const esc_id = escapeSql(self.allocator, session_id) catch return StoreError.SqliteFailed;
         defer self.allocator.free(esc_id);
@@ -200,6 +209,7 @@ const metrics = @import("../metrics/collector.zig");
         try self.runSqlite(io, sql);
     }
 
+    /// Append one chat turn and bump session updated_at in the same transaction batch.
     pub fn appendSessionTurn(
         self: *const Store,
         io: std.Io,
@@ -243,6 +253,7 @@ const metrics = @import("../metrics/collector.zig");
         return self.querySql(io, sql);
     }
 
+    /// Open a metric run row before samples are flushed (upsert by run_id).
     pub fn beginMetricRun(
         self: *const Store,
         io: std.Io,
@@ -264,6 +275,7 @@ const metrics = @import("../metrics/collector.zig");
         try self.runSqlite(io, sql);
     }
 
+    /// Mark run end time so history queries can compute duration.
     pub fn finishMetricRun(self: *const Store, io: std.Io, run_id: []const u8, finished_at: i64) StoreError!void {
         const esc_id = escapeSql(self.allocator, run_id) catch return StoreError.SqliteFailed;
         defer self.allocator.free(esc_id);
@@ -274,6 +286,7 @@ const metrics = @import("../metrics/collector.zig");
         try self.runSqlite(io, sql);
     }
 
+    /// Insert one numeric sample with optional JSON tags for dimensional drill-down.
     pub fn writeMetricSample(
         self: *const Store,
         io: std.Io,

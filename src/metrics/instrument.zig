@@ -11,6 +11,7 @@ const Wrapped = struct {
     inner: llm.Provider,
 };
 
+/// Install metrics wrapper around inner LLM provider (single global wrap_state).
 pub fn wrap(metrics: *collector.Metrics, io: std.Io, inner: llm.Provider) llm.Provider {
     const w = &wrap_state;
     w.* = .{ .metrics = metrics, .io = io, .inner = inner };
@@ -21,6 +22,7 @@ pub fn wrap(metrics: *collector.Metrics, io: std.Io, inner: llm.Provider) llm.Pr
     };
 }
 
+/// Record request count, tokens, and wall latency around non-stream complete.
 fn complete(ptr: *anyopaque, allocator: std.mem.Allocator, request: llm.CompletionRequest) !llm.CompletionResponse {
     const w: *Wrapped = @ptrCast(@alignCast(ptr));
     const start = std.Io.Clock.Timestamp.now(w.io, .awake);
@@ -36,6 +38,7 @@ fn complete(ptr: *anyopaque, allocator: std.mem.Allocator, request: llm.Completi
     return resp;
 }
 
+/// Stream path: count chunks via CountingSink and aggregate same LLM metrics.
 fn streamComplete(
     ptr: *anyopaque,
     allocator: std.mem.Allocator,
@@ -64,6 +67,7 @@ const CountingSink = struct {
     io: std.Io,
     chunks: u32 = 0,
 
+    /// Build a Sink vtable that delegates to inner while counting token chunks.
     fn sink(self: *CountingSink) stream_mod.Sink {
         return .{
             .ptr = @ptrCast(self),
@@ -71,6 +75,7 @@ const CountingSink = struct {
         };
     }
 
+    /// Increment stream/LLM chunk counters then forward to operator sink.
     fn emit(ptr: *anyopaque, io: std.Io, chunk: stream_mod.Chunk) !void {
         const self: *CountingSink = @ptrCast(@alignCast(ptr));
         if (chunk.kind == .token and chunk.text.len > 0) self.chunks += 1;

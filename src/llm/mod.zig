@@ -51,6 +51,7 @@ pub const Provider = struct {
         sink: @import("../stream/mod.zig").Sink,
     ) anyerror!CompletionResponse = null,
 
+    /// Dispatch non-stream completion to the vtable-backed provider implementation.
     pub fn complete(
         self: Provider,
         allocator: std.mem.Allocator,
@@ -59,6 +60,7 @@ pub const Provider = struct {
         return self.completeFn(self.ptr, allocator, request);
     }
 
+    /// Prefer native streaming; fall back to one-shot complete + single token emit.
     pub fn completeStream(
         self: Provider,
         allocator: std.mem.Allocator,
@@ -81,6 +83,7 @@ pub const Resolved = union(enum) {
     openai: openai.OpenAiProvider,
     anthropic: anthropic.AnthropicProvider,
 
+    /// Free provider-owned env strings (API keys, base URLs, models).
     pub fn deinit(self: *Resolved) void {
         switch (self.*) {
             .stub => {},
@@ -89,6 +92,7 @@ pub const Resolved = union(enum) {
         }
     }
 
+    /// Return a vtable Provider view over the resolved union variant.
     pub fn provider(self: *Resolved) Provider {
         return switch (self.*) {
             .stub => StubProvider.init(),
@@ -97,6 +101,7 @@ pub const Resolved = union(enum) {
         };
     }
 
+    /// Which backend was selected — used for metrics tags and logging.
     pub fn kind(self: *const Resolved) ProviderKind {
         return switch (self.*) {
             .stub => .stub,
@@ -105,6 +110,7 @@ pub const Resolved = union(enum) {
         };
     }
 
+    /// Human-readable provider tag (stub | openai | anthropic).
     pub fn kindName(self: *const Resolved) []const u8 {
         return @tagName(self.kind());
     }
@@ -115,6 +121,7 @@ pub const Resolved = union(enum) {
 /// - else `ANTHROPIC_API_KEY` → anthropic
 /// - else `OPENAI_API_KEY` → openai
 /// - else stub
+/// Explicit env wins over key heuristics so CI can force stub offline.
 pub fn resolve(allocator: std.mem.Allocator, io: std.Io) !Resolved {
     if (try env.get(allocator, io, "TARS_LLM_PROVIDER")) |choice| {
         defer allocator.free(choice);
@@ -141,6 +148,7 @@ pub fn resolve(allocator: std.mem.Allocator, io: std.Io) !Resolved {
 
 /// Stub provider for tests and offline skeleton — returns deterministic JSON.
 pub const StubProvider = struct {
+    /// Build a Provider vtable pointing at static stub state (no heap allocation).
     pub fn init() Provider {
         return .{
             .ptr = @ptrCast(@constCast(&stub_state)),
@@ -149,6 +157,7 @@ pub const StubProvider = struct {
         };
     }
 
+    /// Return fixed JSON so tests and offline runs never hit the network.
     fn completeStub(
         ptr: *anyopaque,
         allocator: std.mem.Allocator,
@@ -165,6 +174,7 @@ pub const StubProvider = struct {
         };
     }
 
+    /// Emit stub JSON char-by-char so stream consumers exercise the same path as live LLMs.
     fn streamStub(
         ptr: *anyopaque,
         allocator: std.mem.Allocator,

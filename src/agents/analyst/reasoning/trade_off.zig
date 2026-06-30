@@ -12,6 +12,7 @@ const system_prompt =
     \\Encode necessary sacrifice (hotfix vs deep fix, scope vs deadline). Output strict JSON only.
 ;
 
+/// Register PLAN-phase trade-off block (rank conflicting options).
 pub fn block() rb.Block {
     return .{
         .id = "trade_off",
@@ -21,6 +22,7 @@ pub fn block() rb.Block {
     };
 }
 
+/// Resolve constraint conflicts into ranked options with cost/benefit arrays.
 fn invoke(
     ptr: *anyopaque,
     allocator: std.mem.Allocator,

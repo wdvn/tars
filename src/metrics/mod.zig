@@ -14,6 +14,7 @@ pub const gGauge = collector.gGauge;
 pub const setGlobal = collector.setGlobal;
 pub const global = collector.global;
 
+/// Wrap LLM provider to record latency, tokens, and stream chunk metrics.
 pub fn instrumentProvider(m: *Metrics, io: std.Io, provider: @import("../llm/mod.zig").Provider) @import("../llm/mod.zig").Provider {
     return @import("instrument.zig").wrap(m, io, provider);
 }

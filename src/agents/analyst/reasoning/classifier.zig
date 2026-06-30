@@ -12,6 +12,7 @@ const system_prompt =
     \\Be honest (honesty parameter 90%). Output strict JSON only.
 ;
 
+/// Register ORIENT-phase classifier block (symptom vs root cause).
 pub fn block() rb.Block {
     return .{
         .id = "classifier",
@@ -21,6 +22,7 @@ pub fn block() rb.Block {
     };
 }
 
+/// Call LLM with structured classification schema; persist payload as classification artifact.
 fn invoke(
     ptr: *anyopaque,
     allocator: std.mem.Allocator,

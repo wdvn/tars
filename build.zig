@@ -1,5 +1,6 @@
 const std = @import("std");
 
+/// Wire the tars library module, CLI executable, run step, and init-db helper.
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});

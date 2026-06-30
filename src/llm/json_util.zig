@@ -2,6 +2,7 @@
 
 const std = @import("std");
 
+/// Escape a string for embedding in hand-built JSON request bodies.
 pub fn escapeString(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
@@ -26,10 +27,12 @@ pub fn escapeString(allocator: std.mem.Allocator, text: []const u8) ![]const u8 
     return out.toOwnedSlice(allocator);
 }
 
+/// Parse arbitrary JSON text into a dynamic Value tree (always allocates).
 pub fn parseDynamic(allocator: std.mem.Allocator, text: []const u8) !std.json.Parsed(std.json.Value) {
     return std.json.parseFromSlice(std.json.Value, allocator, text, .{ .allocate = .alloc_always });
 }
 
+/// Narrow json.Value to string slice; null for non-string types.
 pub fn valueAsString(value: std.json.Value) ?[]const u8 {
     return switch (value) {
         .string => |s| s,
@@ -37,10 +40,12 @@ pub fn valueAsString(value: std.json.Value) ?[]const u8 {
     };
 }
 
+/// Safe object field lookup without panicking on wrong node type.
 pub fn objectGet(obj: std.json.ObjectMap, key: []const u8) ?std.json.Value {
     return obj.get(key);
 }
 
+/// Extract OpenAI chat completion message.content from choices[0].
 pub fn firstChoiceContent(body: []const u8) !?[]const u8 {
     var parsed = try parseDynamic(std.heap.page_allocator, body);
     defer parsed.deinit();
@@ -55,6 +60,7 @@ pub fn firstChoiceContent(body: []const u8) !?[]const u8 {
     return valueAsString(content);
 }
 
+/// Extract Anthropic text from content[0].text block.
 pub fn anthropicContent(body: []const u8) !?[]const u8 {
     var parsed = try parseDynamic(std.heap.page_allocator, body);
     defer parsed.deinit();
@@ -67,6 +73,7 @@ pub fn anthropicContent(body: []const u8) !?[]const u8 {
     return valueAsString(text);
 }
 
+/// Sum usage tokens — supports OpenAI total_tokens or Anthropic input+output pair.
 pub fn totalTokens(body: []const u8) u32 {
     var parsed = parseDynamic(std.heap.page_allocator, body) catch return 0;
     defer parsed.deinit();
@@ -86,6 +93,7 @@ pub fn totalTokens(body: []const u8) u32 {
     return 0;
 }
 
+/// Reverse JSON string escapes (\\n, \\uXXXX, etc.) into raw UTF-8 bytes.
 pub fn unescapeJsonString(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
@@ -118,6 +126,7 @@ pub fn unescapeJsonString(allocator: std.mem.Allocator, raw: []const u8) ![]cons
     return out.toOwnedSlice(allocator);
 }
 
+/// Lightweight string-field extractor for streaming SSE JSON fragments (no full parse).
 pub fn extractJsonStringField(allocator: std.mem.Allocator, json: []const u8, field: []const u8) ![]const u8 {
     const needle = try std.fmt.allocPrint(allocator, "\"{s}\":\"", .{field});
     defer allocator.free(needle);

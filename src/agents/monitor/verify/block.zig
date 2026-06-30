@@ -20,6 +20,7 @@ pub const Block = struct {
         command: []const u8,
     ) types.MonitorError!VerifyCheck,
 
+    /// Execute verify command through block-specific runFn.
     pub fn run(
         self: Block,
         allocator: std.mem.Allocator,
@@ -42,6 +43,7 @@ pub const audit_writer = @import("audit_writer.zig");
 pub const handoff_builder = @import("handoff_builder.zig");
 pub const health_watchdog = @import("health_watchdog.zig");
 
+/// Default verify pipeline — shell command runner only in skeleton.
 pub fn defaultBlocks() [1]Block {
     return .{verifier.block()};
 }

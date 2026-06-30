@@ -16,6 +16,7 @@ The **tars** project is inspired by T.A.R.S. (Tactical Autonomous Robot Spacecra
 | [Core Parameters](./parameters.md) | Honesty, humor, and adjustable behavior settings |
 | [Behavior Rules](./behavior.md) | Communication, work ethics, boundaries |
 | [Problem-Solving Rules](./problem-solving.md) | Analysis workflow, prioritization, action under pressure |
+| [Comparison: tars vs. mini-agent](./comparison.md) | Architecture, capabilities, and use-case comparison |
 
 ---
 

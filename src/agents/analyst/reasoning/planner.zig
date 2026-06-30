@@ -12,6 +12,7 @@ const system_prompt =
     \\Include Plan A steps, rollback path, and contingencies. Output strict JSON only.
 ;
 
+/// Register PLAN-phase planner block (steps, rollback, contingencies).
 pub fn block() rb.Block {
     return .{
         .id = "planner",
@@ -21,6 +22,7 @@ pub fn block() rb.Block {
     };
 }
 
+/// Produce minimal plan JSON at low temperature for deterministic step ordering.
 fn invoke(
     ptr: *anyopaque,
     allocator: std.mem.Allocator,

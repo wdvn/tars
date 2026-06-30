@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("../../../types.zig");
 const verify = @import("block.zig");
 
+/// Assemble Handoff summary JSON from verify check results and action count.
 pub fn build(
     allocator: std.mem.Allocator,
     mission_id: []const u8,

@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("../../../types.zig");
 const action = @import("block.zig");
 
+/// Shell action block — runs payload as bash -c command.
 pub fn block() action.Block {
     return .{
         .id = "shell_runner",
@@ -11,6 +12,7 @@ pub fn block() action.Block {
     };
 }
 
+/// Execute shell command and capture stdout/stderr with exit code for Safety Guard audit.
 fn run(
     ptr: *anyopaque,
     allocator: std.mem.Allocator,

@@ -6,6 +6,7 @@ const memory = @import("../../memory/mod.zig");
 const policy = @import("../../policy/mod.zig");
 const action = @import("action/mod.zig");
 const metrics = @import("../../metrics/collector.zig");
+const stream = @import("../../stream/mod.zig");
 
 pub const Executor = struct {
     store: memory.store.Store,
@@ -24,6 +25,7 @@ pub const Executor = struct {
         self: *const Executor,
         allocator: std.mem.Allocator,
         plan: *const types.ApprovedPlan,
+        sink: ?stream.Sink,
     ) !types.ExecuteOutcome {
         if (plan.steps.len == 0) return types.ExecutorError.InvalidPlan;
 
@@ -88,8 +90,17 @@ pub const Executor = struct {
             defer allocator.free(started);
             try self.store.appendAudit(self.io, plan.mission_id, "executor", "action_started", started, now);
 
+            action.stream_sink.set(sink);
+            defer action.stream_sink.set(null);
+
             const block = action.block.blockForKind(step.kind) orelse return types.ExecutorError.InvalidPlan;
+            if (sink) |s| {
+                stream.emitToolStart(self.io, s, step.kind.name(), step.payload) catch {};
+            }
             var result = try block.run(allocator, self.io, act);
+            if (sink) |s| {
+                stream.emitToolEnd(self.io, s, step.kind.name(), result.success, result.exit_code) catch {};
+            }
             result.step_index = i;
 
             try completed.append(allocator, result);

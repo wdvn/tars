@@ -4,6 +4,7 @@ const memory = @import("../../../memory/mod.zig");
 const metrics = @import("../../../metrics/collector.zig");
 
 pub const Writer = struct {
+    /// Write audit_log row as Monitor agent and bump audit metric.
     pub fn log(
         store: *const memory.store.Store,
         io: std.Io,

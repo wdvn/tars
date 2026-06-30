@@ -97,7 +97,7 @@ pub fn runAutonomous(
 
         // ACT → VERIFY: execute plan steps then run monitor checks.
         if (ctx.phase == .act) {
-            const outcome = try exec.execute(allocator, plan);
+            const outcome = try exec.execute(allocator, plan, sink);
             defer freeExecuteOutcome(allocator, outcome);
 
             const action_results = switch (outcome) {
@@ -183,11 +183,13 @@ fn jsonQuote(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
 }
 
 fn freeBlockResults(allocator: std.mem.Allocator, results: []types.BlockResult) void {
+    // Each BlockResult owns a heap JSON payload from the LLM reasoning block.
     for (results) |r| allocator.free(r.payload_json);
     allocator.free(results);
 }
 
 fn freeExecuteOutcome(allocator: std.mem.Allocator, outcome: types.ExecuteOutcome) void {
+    // Both completed and blocked paths may hold partial action stdout/stderr buffers.
     switch (outcome) {
         .completed => |r| freeActionResults(allocator, r),
         .blocked => |b| freeActionResults(allocator, b.completed),
@@ -195,6 +197,7 @@ fn freeExecuteOutcome(allocator: std.mem.Allocator, outcome: types.ExecuteOutcom
 }
 
 fn freeActionResults(allocator: std.mem.Allocator, results: []const types.ActionResult) void {
+    // Shell/git/MCP runners allocate stdout and stderr per step.
     for (results) |r| {
         allocator.free(r.stdout);
         allocator.free(r.stderr);

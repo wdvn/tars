@@ -1,6 +1,7 @@
 const std = @import("std");
 const vb = @import("block.zig");
 
+/// Register shell-based verify block for ACT→VERIFY handoff checks.
 pub fn block() vb.Block {
     return .{
         .id = "verifier",
@@ -9,6 +10,7 @@ pub fn block() vb.Block {
     };
 }
 
+/// Run verify command via bash; pass/fail follows exit code, output captured for handoff.
 fn run(
     ptr: *anyopaque,
     allocator: std.mem.Allocator,

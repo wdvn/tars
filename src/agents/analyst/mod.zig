@@ -12,6 +12,7 @@ pub const Analyst = struct {
     provider: llm.Provider,
     io: std.Io,
 
+    /// Bind store, LLM provider, and I/O for one Analyst agent instance.
     pub fn init(store: memory.store.Store, provider: llm.Provider, io: std.Io) Analyst {
         return .{ .store = store, .provider = provider, .io = io };
     }
@@ -66,6 +67,7 @@ pub const Analyst = struct {
         return results.toOwnedSlice(allocator);
     }
 
+    /// Path to external vector recall SQL (used when sqlite-vector is loaded).
     pub fn orientRecallQuery(_: *const Analyst) []const u8 {
         return memory.store.query_recall_path;
     }

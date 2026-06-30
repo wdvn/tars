@@ -8,6 +8,7 @@ pub const Block = block.Block;
 pub const assemblePrompt = block.assemblePrompt;
 pub const blocksForPhase = block.blocksForPhase;
 
+/// Return all four Analyst reasoning blocks in OODA order for full-phase runs.
 pub fn allBlocks() [4]Block {
     return .{
         classifier.block(),

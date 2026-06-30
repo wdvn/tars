@@ -23,13 +23,16 @@ pub const Session = struct {
     }
 
     pub fn deinit(self: *Session, allocator: std.mem.Allocator) void {
+        // Only the session id is heap-owned; store/io are borrowed from caller.
         allocator.free(self.id);
     }
 
+    /// Record operator (human) turn in session history.
     pub fn appendOperator(self: *const Session, content: []const u8) !void {
         try self.appendTurn("operator", content);
     }
 
+    /// Record agent turn with role label (e.g. "analyst").
     pub fn appendAgent(self: *const Session, agent: []const u8, content: []const u8) !void {
         try self.appendTurn(agent, content);
     }
@@ -46,11 +49,13 @@ pub const Session = struct {
         }
     }
 
+    /// Load last N turns as tab-separated role\\tcontent blob for LLM context.
     pub fn recentContext(self: *const Session, _: std.mem.Allocator, limit: usize) ![]const u8 {
         return self.store.recentSessionTurns(self.io, self.id, limit);
     }
 };
 
+/// Stable hash for session id suffix (not cryptographic).
 fn hashLabel(label: []const u8) u64 {
     return std.hash.Wyhash.hash(0, label);
 }

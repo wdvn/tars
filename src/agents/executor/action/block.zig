@@ -15,6 +15,7 @@ pub const Block = struct {
         action: types.Action,
     ) types.ExecutorError!types.ActionResult,
 
+    /// Run one Executor action through the kind-specific runFn vtable.
     pub fn run(
         self: Block,
         allocator: std.mem.Allocator,
@@ -25,6 +26,7 @@ pub const Block = struct {
     }
 };
 
+/// Map ActionKind to concrete action block; verify handled by Monitor only.
 pub fn blockForKind(kind: types.ActionKind) ?Block {
     return switch (kind) {
         .shell => shell_runner.block(),
@@ -32,6 +34,7 @@ pub fn blockForKind(kind: types.ActionKind) ?Block {
         .git => git_ops.block(),
         .verify => null, // Monitor-only in skeleton
         .mcp => mcp_bridge.block(),
+        .skill => skill_runner.block(),
     };
 }
 
@@ -39,3 +42,5 @@ pub const shell_runner = @import("shell_runner.zig");
 pub const file_editor = @import("file_editor.zig");
 pub const git_ops = @import("git_ops.zig");
 pub const mcp_bridge = @import("mcp_bridge.zig");
+pub const skill_runner = @import("skill_runner.zig");
+pub const stream_sink = @import("stream_sink.zig");

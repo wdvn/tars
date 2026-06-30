@@ -10,6 +10,7 @@ pub const Unit = enum {
     score,
     ratio,
 
+    /// Stable unit tag for reports and JSON export.
     pub fn name(self: Unit) []const u8 {
         return @tagName(self);
     }
@@ -76,6 +77,16 @@ pub const all: []const Def = &.{
     // --- MCP ---
     .{ .name = "mcp.tool.calls", .unit = .count, .subsystem = "mcp", .description = "MCP tool invocations" },
     .{ .name = "mcp.tool.errors", .unit = .count, .subsystem = "mcp", .description = "MCP tool failures" },
+    .{ .name = "mcp.rpc.requests", .unit = .count, .subsystem = "mcp", .description = "JSON-RPC requests sent to MCP server" },
+
+    // --- Skills ---
+    .{ .name = "executor.skills.invoked", .unit = .count, .subsystem = "executor", .description = "Skill action invocations" },
+    .{ .name = "executor.skills.errors", .unit = .count, .subsystem = "executor", .description = "Skill load/list failures" },
+
+    // --- Stream ---
+    .{ .name = "stream.chunks.emitted", .unit = .count, .subsystem = "stream", .description = "Output chunks to operator" },
+    .{ .name = "stream.sse.frames", .unit = .count, .subsystem = "stream", .description = "SSE frames emitted" },
+    .{ .name = "stream.ndjson.lines", .unit = .count, .subsystem = "stream", .description = "NDJSON lines emitted" },
 
     // --- Safety ---
     .{ .name = "safety.guard.evaluations", .unit = .count, .subsystem = "safety", .description = "Safety Guard evaluations" },
@@ -87,13 +98,11 @@ pub const all: []const Def = &.{
     .{ .name = "http.requests.total", .unit = .count, .subsystem = "http", .description = "HTTP requests (LLM transport)" },
     .{ .name = "http.requests.errors", .unit = .count, .subsystem = "http", .description = "HTTP request failures" },
 
-    // --- Stream ---
-    .{ .name = "stream.chunks.emitted", .unit = .count, .subsystem = "stream", .description = "Output chunks to operator" },
-
     // --- Bus ---
     .{ .name = "bus.events.published", .unit = .count, .subsystem = "bus", .description = "Agent bus events published" },
 };
 
+/// Lookup metric definition by canonical name; null if unknown.
 pub fn find(name: []const u8) ?Def {
     for (all) |d| {
         if (std.mem.eql(u8, d.name, name)) return d;
@@ -101,6 +110,7 @@ pub fn find(name: []const u8) ?Def {
     return null;
 }
 
+/// Resolve unit for a metric name — panics if name not in catalog (programmer error).
 pub fn unitFor(name: []const u8) Unit {
     return find(name).?.unit;
 }

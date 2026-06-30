@@ -5,6 +5,7 @@ pub const Agent = enum {
     executor,
     monitor,
 
+    /// Stable lowercase tag for logs, metrics, and SQLite artifact rows.
     pub fn name(self: Agent) []const u8 {
         return switch (self) {
             .analyst => "analyst",
@@ -21,6 +22,7 @@ pub const Phase = enum {
     act,
     verify,
 
+    /// OODA phase label used in mission loop transitions and stored artifacts.
     pub fn name(self: Phase) []const u8 {
         return switch (self) {
             .orient => "orient",
@@ -41,6 +43,7 @@ pub const MissionStatus = enum {
     done,
     blocked,
 
+    /// Current mission lifecycle state; includes terminal done/blocked beyond OODA phases.
     pub fn name(self: MissionStatus) []const u8 {
         return @tagName(self);
     }
@@ -51,6 +54,7 @@ pub const Priority = enum {
     normal,
     background,
 
+    /// Scheduling hint for future multi-mission queue (critical runs first).
     pub fn name(self: Priority) []const u8 {
         return @tagName(self);
     }
@@ -91,7 +95,9 @@ pub const ActionKind = enum {
     git,
     verify,
     mcp,
+    skill,
 
+    /// Executor dispatch key — maps to action blocks (shell, file_edit, git, mcp, skill).
     pub fn name(self: ActionKind) []const u8 {
         return @tagName(self);
     }

@@ -53,6 +53,7 @@ fn joinTags(allocator: std.mem.Allocator, tags: []const []const u8) ![]const u8 
 }
 
 pub fn defaultContext(mission_id: []const u8, goal: []const u8) types.MissionContext {
+    // Fresh mission starts in ORIENT with empty evidence JSON object.
     return .{
         .mission_id = mission_id,
         .goal = goal,

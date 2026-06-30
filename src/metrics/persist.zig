@@ -21,6 +21,7 @@ pub fn flush(m: *const collector.Metrics, st: *const store_mod.Store, io: std.Io
 }
 
 fn splitKey(key: []const u8) struct { metric: []const u8, tags: []const u8 } {
+    // Mirror collector.splitKey — metric name precedes first pipe.
     if (std.mem.indexOfScalar(u8, key, '|')) |n| {
         return .{ .metric = key[0..n], .tags = key[n + 1 ..] };
     }

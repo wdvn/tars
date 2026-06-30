@@ -22,6 +22,7 @@ pub const OpenAiProvider = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
 
+    /// Load API key, base URL, and default model from env; trim trailing slash on base.
     pub fn create(allocator: std.mem.Allocator, io: std.Io) LlmError!OpenAiProvider {
         const api_key = try env.get(allocator, io, "OPENAI_API_KEY") orelse return LlmError.MissingApiKey;
         const base_raw = try env.getOr(allocator, io, "OPENAI_BASE_URL", "https://api.openai.com/v1");
@@ -38,12 +39,14 @@ pub const OpenAiProvider = struct {
         };
     }
 
+    /// Release heap-owned credential and endpoint strings.
     pub fn deinit(self: *OpenAiProvider) void {
         self.allocator.free(self.api_key);
         self.allocator.free(self.base_url);
         self.allocator.free(self.default_model);
     }
 
+    /// Expose this struct through the generic llm.Provider vtable.
     pub fn provider(self: *OpenAiProvider) llm.Provider {
         return .{
             .ptr = @ptrCast(self),
@@ -52,14 +55,17 @@ pub const OpenAiProvider = struct {
         };
     }
 
+    /// OpenAI-compatible chat/completions URL under configurable base.
     fn endpoint(self: *const OpenAiProvider, allocator: std.mem.Allocator) ![]const u8 {
         return std.fmt.allocPrint(allocator, "{s}/chat/completions", .{self.base_url});
     }
 
+    /// Standard Bearer header for OpenAI and compatible proxies.
     fn authHeader(self: *const OpenAiProvider, allocator: std.mem.Allocator) ![]const u8 {
         return std.fmt.allocPrint(allocator, "Bearer {s}", .{self.api_key});
     }
 
+    /// Hand-build JSON body: system first, then messages; enable json_object when schema set.
     fn buildBody(
         self: *const OpenAiProvider,
         allocator: std.mem.Allocator,
@@ -112,6 +118,7 @@ pub const OpenAiProvider = struct {
         return body;
     }
 
+    /// POST chat/completions, parse first choice content and token usage from response.
     fn complete(
         ptr: *anyopaque,
         allocator: std.mem.Allocator,
@@ -146,6 +153,7 @@ pub const OpenAiProvider = struct {
         };
     }
 
+    /// Stream SSE lines, accumulate tokens, and mirror each chunk to the operator sink.
     fn streamComplete(
         ptr: *anyopaque,
         allocator: std.mem.Allocator,
@@ -197,6 +205,7 @@ const StreamCtx = struct {
     acc: *std.ArrayList(u8),
 };
 
+/// Parse one OpenAI SSE data line; skip [DONE] and non-data prefixes.
 fn onOpenAiLine(ctx_ptr: *anyopaque, line: []const u8) !void {
     const ctx: *StreamCtx = @ptrCast(@alignCast(ctx_ptr));
     if (!std.mem.startsWith(u8, line, "data: ")) return;

@@ -15,6 +15,7 @@ pub const DbTotals = struct {
     metric_runs: i64 = 0,
 };
 
+/// Count rows in core SQLite tables for end-of-run operational report.
 pub fn loadDbTotals(st: *const store_mod.Store, io: std.Io, allocator: std.mem.Allocator) !DbTotals {
     var t: DbTotals = .{};
     t.artifacts = try queryCount(st, io, "SELECT COUNT(*) FROM artifacts;");
@@ -28,6 +29,7 @@ pub fn loadDbTotals(st: *const store_mod.Store, io: std.Io, allocator: std.mem.A
     return t;
 }
 
+/// Parse single-cell COUNT(*) result; returns 0 on query/parse failure.
 fn queryCount(st: *const store_mod.Store, io: std.Io, sql: []const u8) !i64 {
     const out = st.querySql(io, sql) catch return 0;
     defer st.allocator.free(out);
@@ -35,6 +37,7 @@ fn queryCount(st: *const store_mod.Store, io: std.Io, sql: []const u8) !i64 {
     return std.fmt.parseInt(i64, trimmed, 10) catch 0;
 }
 
+/// Pretty-print full metric catalog for current run plus database totals.
 pub fn printHuman(
     w: *std.Io.Writer,
     m: *const collector.Metrics,
@@ -64,6 +67,7 @@ pub fn printHuman(
     try w.print("  metric_samples:  {d}\n", .{db.metric_samples});
 }
 
+/// Machine-readable report: run metadata, all metrics (including zeros), DB totals.
 pub fn printJson(
     allocator: std.mem.Allocator,
     w: *std.Io.Writer,
@@ -88,7 +92,7 @@ pub fn printJson(
     _ = allocator;
 }
 
-/// Report all persisted runs (summary).
+/// Summarize last 20 persisted metric runs from SQLite (id, command, sample stats).
 pub fn printHistory(st: *const store_mod.Store, io: std.Io, w: *std.Io.Writer) !void {
     const sql =
         \\SELECT r.id, r.command, COUNT(s.id), COALESCE(SUM(s.value), 0)

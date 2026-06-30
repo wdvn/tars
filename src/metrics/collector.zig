@@ -51,9 +51,11 @@ pub const Metrics = struct {
     }
 
     pub fn inc(self: *Metrics, name: []const u8, delta: f64) !void {
+        // Untagged counter increment — tags default to empty JSON object.
         try self.record(name, delta, "{}");
     }
 
+    /// Increment a counter with dimensional tags (stored in the map key).
     pub fn incTags(self: *Metrics, name: []const u8, delta: f64, tags_json: []const u8) !void {
         try self.record(name, delta, tags_json);
     }
@@ -84,6 +86,7 @@ pub const Metrics = struct {
     }
 
     fn makeKey(self: *Metrics, name: []const u8, tags_json: []const u8) ![]const u8 {
+        // Pipe separator lets value() split metric name from tag JSON without extra structs.
         return std.fmt.allocPrint(self.allocator, "{s}|{s}", .{ name, tags_json });
     }
 
@@ -98,6 +101,7 @@ pub const Metrics = struct {
         return total;
     }
 
+    /// Build a full registry snapshot (zeros for metrics never incremented this run).
     pub fn snapshot(self: *const Metrics, allocator: std.mem.Allocator) ![]Sample {
         var out: std.ArrayList(Sample) = .empty;
         errdefer {
@@ -129,6 +133,7 @@ const KeyParts = struct {
     tags: []const u8,
 };
 
+/// Split composite map key back into metric name and tags JSON.
 fn splitKey(key: []const u8) KeyParts {
     if (std.mem.indexOfScalar(u8, key, '|')) |n| {
         return .{ .metric = key[0..n], .tags = key[n + 1 ..] };
@@ -140,6 +145,7 @@ fn splitKey(key: []const u8) KeyParts {
 
 var global_ptr: ?*Metrics = null;
 
+/// Register the active run so gInc/gGauge work from any module without threading Metrics.
 pub fn setGlobal(m: ?*Metrics) void {
     global_ptr = m;
 }
@@ -148,18 +154,21 @@ pub fn global() ?*Metrics {
     return global_ptr;
 }
 
+/// Best-effort untagged increment — ignores errors when metrics are disabled.
 pub fn gInc(name: []const u8, delta: f64) void {
     if (global_ptr) |m| {
         m.inc(name, delta) catch {};
     }
 }
 
+/// Best-effort tagged increment for dimensional metrics.
 pub fn gIncTags(name: []const u8, delta: f64, tags: []const u8) void {
     if (global_ptr) |m| {
         m.incTags(name, delta, tags) catch {};
     }
 }
 
+/// Best-effort gauge update (e.g. recall top_score).
 pub fn gGauge(name: []const u8, value: f64) void {
     if (global_ptr) |m| {
         m.setGauge(name, value) catch {};
