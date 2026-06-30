@@ -5,8 +5,14 @@ const types = @import("../../types.zig");
 const memory = @import("../../memory/mod.zig");
 const policy = @import("../../policy/mod.zig");
 const action = @import("action/mod.zig");
+const checkpoint = @import("checkpoint.zig");
+const rollback_mod = @import("rollback.zig");
 const metrics = @import("../../metrics/collector.zig");
 const stream = @import("../../stream/mod.zig");
+
+pub const Checkpoint = checkpoint;
+pub const ExecuteOptions = checkpoint.ExecuteOptions;
+pub const RollbackResult = rollback_mod.RollbackResult;
 
 pub const Executor = struct {
     store: memory.store.Store,
@@ -26,6 +32,7 @@ pub const Executor = struct {
         allocator: std.mem.Allocator,
         plan: *const types.ApprovedPlan,
         sink: ?stream.Sink,
+        opts: ExecuteOptions,
     ) !types.ExecuteOutcome {
         if (plan.steps.len == 0) return types.ExecutorError.InvalidPlan;
 
@@ -35,10 +42,16 @@ pub const Executor = struct {
         const now: i64 = 0;
 
         for (plan.steps, 0..) |step, i| {
+            if (i < opts.from_step) continue;
+
+            if (opts.rollback_before_retry and i == opts.from_step) {
+                checkpoint.rollbackStep(allocator, self.io, self.store, plan.mission_id, i, opts.repo_root) catch {};
+                metrics.gInc("executor.retry.from_step", 1);
+            }
+
             const act = types.Action{ .kind = step.kind, .payload = step.payload };
             metrics.gInc("executor.actions.total", 1);
 
-            // Safety Guard may deny before any side-effecting action runs.
             switch (policy.safety_guard.Guard.evaluate(act)) {
                 .deny => |d| {
                     metrics.gInc("executor.actions.denied", 1);
@@ -84,8 +97,23 @@ pub const Executor = struct {
                 .allow => {},
             }
 
-            const started = try std.fmt.allocPrint(allocator, "{{\"step\":{d},\"kind\":\"{s}\"}}", .{
-                i, step.kind.name(),
+            const backup_dir = checkpoint.prepareStep(
+                allocator,
+                self.io,
+                self.store,
+                plan.mission_id,
+                i,
+                step,
+                opts.repo_root,
+                now,
+            ) catch |err| switch (err) {
+                error.StorageUnavailable => return types.ExecutorError.StorageUnavailable,
+                else => return types.ExecutorError.ActionFailed,
+            };
+            defer allocator.free(backup_dir);
+
+            const started = try std.fmt.allocPrint(allocator, "{{\"step\":{d},\"kind\":\"{s}\",\"backup_dir\":\"{s}\"}}", .{
+                i, step.kind.name(), backup_dir,
             });
             defer allocator.free(started);
             try self.store.appendAudit(self.io, plan.mission_id, "executor", "action_started", started, now);
@@ -109,6 +137,8 @@ pub const Executor = struct {
             const result_json = try formatActionResult(allocator, &result);
             defer allocator.free(result_json);
 
+            checkpoint.completeStep(self.io, self.store, plan.mission_id, i, result.success, result_json) catch {};
+
             try self.store.writeArtifact(
                 self.io,
                 plan.mission_id,
@@ -120,8 +150,8 @@ pub const Executor = struct {
             );
             metrics.gInc("executor.artifacts.written", 1);
 
-            const done_detail = try std.fmt.allocPrint(allocator, "{{\"step\":{d},\"success\":{s},\"exit\":{d}}}", .{
-                i, if (result.success) "true" else "false", result.exit_code,
+            const done_detail = try std.fmt.allocPrint(allocator, "{{\"step\":{d},\"success\":{s},\"exit\":{d},\"backup_dir\":\"{s}\"}}", .{
+                i, if (result.success) "true" else "false", result.exit_code, backup_dir,
             });
             defer allocator.free(done_detail);
             try self.store.appendAudit(self.io, plan.mission_id, "executor", "action_completed", done_detail, now);
@@ -149,6 +179,56 @@ pub const Executor = struct {
         return .{ .completed = slice };
     }
 
+    /// Roll back one step using its checkpoint (file copy / git HEAD snapshot).
+    pub fn rollbackStep(
+        self: *const Executor,
+        allocator: std.mem.Allocator,
+        mission_id: []const u8,
+        step_index: usize,
+        repo_root: []const u8,
+    ) !void {
+        try checkpoint.rollbackStep(allocator, self.io, self.store, mission_id, step_index, repo_root);
+    }
+
+    /// Re-run plan from `from_step`, optionally restoring that step's backup first.
+    pub fn retryFromStep(
+        self: *const Executor,
+        allocator: std.mem.Allocator,
+        plan: *const types.ApprovedPlan,
+        sink: ?stream.Sink,
+        from_step: usize,
+        repo_root: []const u8,
+    ) !types.ExecuteOutcome {
+        return self.execute(allocator, plan, sink, .{
+            .from_step = from_step,
+            .rollback_before_retry = true,
+            .repo_root = repo_root,
+        });
+    }
+
+    /// Restore executor step checkpoints after verify failure (reverse step order).
+    pub fn rollbackCompletedSteps(
+        self: *const Executor,
+        allocator: std.mem.Allocator,
+        mission_id: []const u8,
+        action_results: []const types.ActionResult,
+        repo_root: []const u8,
+    ) void {
+        rollback_mod.rollbackCompletedSteps(allocator, self.io, self.store, mission_id, action_results, repo_root);
+    }
+
+    /// Run Analyst `plan.rollback` shell script (Safety Guard gated).
+    pub fn runPlanRollback(
+        self: *const Executor,
+        allocator: std.mem.Allocator,
+        mission_id: []const u8,
+        script: []const u8,
+        repo_root: []const u8,
+        trigger_reason: []const u8,
+    ) !RollbackResult {
+        return rollback_mod.runPlanScript(allocator, self.io, self.store, mission_id, script, repo_root, trigger_reason);
+    }
+
     fn freeResults(allocator: std.mem.Allocator, list: *std.ArrayList(types.ActionResult)) void {
         for (list.items) |*r| {
             allocator.free(r.stdout);
@@ -168,3 +248,8 @@ pub const Executor = struct {
         });
     }
 };
+
+/// Release heap stdout/stderr from runPlanRollback.
+pub fn freeRollbackResult(allocator: std.mem.Allocator, result: *RollbackResult) void {
+    rollback_mod.freeResult(allocator, result);
+}

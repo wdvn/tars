@@ -312,4 +312,150 @@ const metrics = @import("../metrics/collector.zig");
         defer self.allocator.free(sql);
         try self.runSqlite(io, sql);
     }
+
+    /// Upsert a pending executor checkpoint before a step runs (enables retry/rollback).
+    pub fn upsertExecutorCheckpoint(
+        self: *const Store,
+        io: std.Io,
+        mission_id: []const u8,
+        step_index: usize,
+        action_kind: []const u8,
+        action_payload: []const u8,
+        backup_dir: ?[]const u8,
+        backup_meta_json: []const u8,
+        created_at: i64,
+    ) StoreError!void {
+        const esc_mid = escapeSql(self.allocator, mission_id) catch return StoreError.SqliteFailed;
+        defer self.allocator.free(esc_mid);
+        const esc_kind = escapeSql(self.allocator, action_kind) catch return StoreError.SqliteFailed;
+        defer self.allocator.free(esc_kind);
+        const esc_payload = escapeSql(self.allocator, action_payload) catch return StoreError.SqliteFailed;
+        defer self.allocator.free(esc_payload);
+        const esc_meta = escapeSql(self.allocator, backup_meta_json) catch return StoreError.SqliteFailed;
+        defer self.allocator.free(esc_meta);
+
+        const esc_dir = if (backup_dir) |d| blk: {
+            const e = escapeSql(self.allocator, d) catch return StoreError.SqliteFailed;
+            break :blk e;
+        } else null;
+        defer if (esc_dir) |d| self.allocator.free(d);
+
+        const sql = if (esc_dir) |dir| blk: {
+            break :blk try std.fmt.allocPrint(self.allocator,
+                \\INSERT INTO executor_checkpoints
+                \\(mission_id, step_index, action_kind, action_payload, backup_dir, backup_meta, status, created_at)
+                \\VALUES ('{s}', {d}, '{s}', '{s}', '{s}', '{s}', 'pending', {d})
+                \\ON CONFLICT(mission_id, step_index) DO UPDATE SET
+                \\  action_kind = excluded.action_kind,
+                \\  action_payload = excluded.action_payload,
+                \\  backup_dir = excluded.backup_dir,
+                \\  backup_meta = excluded.backup_meta,
+                \\  result_json = NULL,
+                \\  status = 'pending',
+                \\  created_at = excluded.created_at;
+            , .{ esc_mid, step_index, esc_kind, esc_payload, dir, esc_meta, created_at });
+        } else try std.fmt.allocPrint(self.allocator,
+            \\INSERT INTO executor_checkpoints
+            \\(mission_id, step_index, action_kind, action_payload, backup_dir, backup_meta, status, created_at)
+            \\VALUES ('{s}', {d}, '{s}', '{s}', NULL, '{s}', 'pending', {d})
+            \\ON CONFLICT(mission_id, step_index) DO UPDATE SET
+            \\  action_kind = excluded.action_kind,
+            \\  action_payload = excluded.action_payload,
+            \\  backup_dir = NULL,
+            \\  backup_meta = excluded.backup_meta,
+            \\  result_json = NULL,
+            \\  status = 'pending',
+            \\  created_at = excluded.created_at;
+        , .{ esc_mid, step_index, esc_kind, esc_payload, esc_meta, created_at });
+        defer self.allocator.free(sql);
+        try self.runSqlite(io, sql);
+    }
+
+    /// Mark checkpoint completed or failed after step execution.
+    pub fn finishExecutorCheckpoint(
+        self: *const Store,
+        io: std.Io,
+        mission_id: []const u8,
+        step_index: usize,
+        status: []const u8,
+        result_json: ?[]const u8,
+    ) StoreError!void {
+        const esc_mid = escapeSql(self.allocator, mission_id) catch return StoreError.SqliteFailed;
+        defer self.allocator.free(esc_mid);
+        const esc_status = escapeSql(self.allocator, status) catch return StoreError.SqliteFailed;
+        defer self.allocator.free(esc_status);
+
+        const sql = if (result_json) |rj| blk: {
+            const esc_result = escapeSql(self.allocator, rj) catch return StoreError.SqliteFailed;
+            defer self.allocator.free(esc_result);
+            break :blk try std.fmt.allocPrint(self.allocator,
+                \\UPDATE executor_checkpoints
+                \\SET status = '{s}', result_json = '{s}'
+                \\WHERE mission_id = '{s}' AND step_index = {d};
+            , .{ esc_status, esc_result, esc_mid, step_index });
+        } else try std.fmt.allocPrint(self.allocator,
+            \\UPDATE executor_checkpoints
+            \\SET status = '{s}', result_json = NULL
+            \\WHERE mission_id = '{s}' AND step_index = {d};
+        , .{ esc_status, esc_mid, step_index });
+        defer self.allocator.free(sql);
+        try self.runSqlite(io, sql);
+    }
+
+    /// Mark checkpoint rolled back after restore.
+    pub fn markExecutorCheckpointRolledBack(
+        self: *const Store,
+        io: std.Io,
+        mission_id: []const u8,
+        step_index: usize,
+    ) StoreError!void {
+        const esc_mid = escapeSql(self.allocator, mission_id) catch return StoreError.SqliteFailed;
+        defer self.allocator.free(esc_mid);
+        const sql = try std.fmt.allocPrint(self.allocator,
+            \\UPDATE executor_checkpoints SET status = 'rolled_back'
+            \\WHERE mission_id = '{s}' AND step_index = {d};
+        , .{ esc_mid, step_index });
+        defer self.allocator.free(sql);
+        try self.runSqlite(io, sql);
+    }
+
+    /// Return payload JSON of the newest artifact for mission + kind.
+    pub fn queryLatestArtifactPayload(
+        self: *const Store,
+        io: std.Io,
+        mission_id: []const u8,
+        kind: []const u8,
+    ) StoreError![]const u8 {
+        const esc_mid = escapeSql(self.allocator, mission_id) catch return StoreError.SqliteFailed;
+        defer self.allocator.free(esc_mid);
+        const esc_kind = escapeSql(self.allocator, kind) catch return StoreError.SqliteFailed;
+        defer self.allocator.free(esc_kind);
+        const sql = try std.fmt.allocPrint(self.allocator,
+            \\SELECT payload FROM artifacts
+            \\WHERE mission_id = '{s}' AND kind = '{s}'
+            \\ORDER BY id DESC
+            \\LIMIT 1;
+        , .{ esc_mid, esc_kind });
+        defer self.allocator.free(sql);
+        return self.querySql(io, sql);
+    }
+
+    /// Return backup_meta JSON for one executor step checkpoint.
+    pub fn queryExecutorCheckpointMeta(
+        self: *const Store,
+        io: std.Io,
+        mission_id: []const u8,
+        step_index: usize,
+    ) StoreError![]const u8 {
+        const esc_mid = escapeSql(self.allocator, mission_id) catch return StoreError.SqliteFailed;
+        defer self.allocator.free(esc_mid);
+        const sql = try std.fmt.allocPrint(self.allocator,
+            \\SELECT COALESCE(backup_meta, '{{}}')
+            \\FROM executor_checkpoints
+            \\WHERE mission_id = '{s}' AND step_index = {d}
+            \\LIMIT 1;
+        , .{ esc_mid, step_index });
+        defer self.allocator.free(sql);
+        return self.querySql(io, sql);
+    }
 };

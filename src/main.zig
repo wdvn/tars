@@ -176,7 +176,7 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
             .{ .kind = .mcp, .payload = "filesystem__read:{\"path\":\"build.zig\"}" },
             .{ .kind = .git, .payload = "status --short" },
         },
-        .rollback = "",
+        .rollback = "echo tars-plan-rollback-ok",
     };
 
     const loop_result = try tars.core.loop.runAutonomous(gpa, io, store, provider, sink, .{

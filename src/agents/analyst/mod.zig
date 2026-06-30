@@ -50,18 +50,23 @@ pub const Analyst = struct {
             metrics.gInc("analyst.artifacts.written", 1);
         }
 
-        if (ctx.phase == .plan and results.items.len > 0) {
-            // Signal executor that an approved plan payload is ready on the bus.
-            try self.store.publishBusEvent(
-                self.io,
-                ctx.mission_id,
-                "analyst",
-                "executor",
-                "plan_ready",
-                results.items[results.items.len - 1].payload_json,
-                now,
-            );
-            metrics.gInc("bus.events.published", 1);
+        if (ctx.phase == .plan) {
+            // Executor expects the planner artifact, not trade_off (last block in PLAN phase).
+            for (results.items) |r| {
+                if (std.mem.eql(u8, r.kind, "plan")) {
+                    try self.store.publishBusEvent(
+                        self.io,
+                        ctx.mission_id,
+                        "analyst",
+                        "executor",
+                        "plan_ready",
+                        r.payload_json,
+                        now,
+                    );
+                    metrics.gInc("bus.events.published", 1);
+                    break;
+                }
+            }
         }
 
         return results.toOwnedSlice(allocator);

@@ -13,6 +13,7 @@ const monitor_mod = @import("../agents/monitor/mod.zig");
 const metrics = @import("../metrics/collector.zig");
 
 pub const mission = @import("mission.zig");
+const plan_mod = @import("plan.zig");
 
 pub const Config = struct {
     max_iterations: usize = 8,
@@ -49,6 +50,10 @@ pub fn runAutonomous(
     // Evidence built inside ORIENT is owned here so later phases can read it.
     var loop_evidence: ?[]u8 = null;
     defer if (loop_evidence) |e| allocator.free(e);
+
+    var rollback_owned: ?[]u8 = null;
+    defer if (rollback_owned) |r| allocator.free(r);
+    var effective_rollback: []const u8 = plan.rollback;
 
     while (iteration < cfg.max_iterations) : (iteration += 1) {
         metrics.gInc("mission.phase.entered", 1);
@@ -93,11 +98,22 @@ pub fn runAutonomous(
         if (ctx.phase == .orient or ctx.phase == .assess or ctx.phase == .plan) {
             const results = try analyst_agent.runPhase(allocator, ctx);
             defer freeBlockResults(allocator, results);
+
+            if (ctx.phase == .plan) {
+                const loaded = plan_mod.loadLatestRollback(allocator, store, io, ctx.mission_id) catch null;
+                if (loaded) |rb| {
+                    if (rollback_owned) |prev| allocator.free(prev);
+                    rollback_owned = rb;
+                    effective_rollback = rb;
+                } else if (plan.rollback.len > 0) {
+                    effective_rollback = plan.rollback;
+                }
+            }
         }
 
         // ACT → VERIFY: execute plan steps then run monitor checks.
         if (ctx.phase == .act) {
-            const outcome = try exec.execute(allocator, plan, sink);
+            const outcome = try exec.execute(allocator, plan, sink, .{ .repo_root = cfg.repo_root });
             defer freeExecuteOutcome(allocator, outcome);
 
             const action_results = switch (outcome) {
@@ -122,6 +138,21 @@ pub fn runAutonomous(
                 },
                 .fail => |loop| {
                     metrics.gInc("mission.verify.fail", 1);
+
+                    exec.rollbackCompletedSteps(allocator, ctx.mission_id, action_results, cfg.repo_root);
+
+                    if (effective_rollback.len > 0) {
+                        try sink.emit(io, .{ .kind = .phase, .text = "plan rollback" });
+                        var rb = exec.runPlanRollback(
+                            allocator,
+                            ctx.mission_id,
+                            effective_rollback,
+                            cfg.repo_root,
+                            loop.reason,
+                        ) catch executor_mod.RollbackResult{};
+                        defer executor_mod.freeRollbackResult(allocator, &rb);
+                    }
+
                     ctx.phase = loop.target_phase;
                     ctx.status = switch (loop.target_phase) {
                         .orient => .orient,

@@ -190,13 +190,14 @@ pub const StubProvider = struct {
         request: CompletionRequest,
     ) !CompletionResponse {
         _ = ptr;
-        _ = request;
-        const json =
+        const json = if (std.mem.indexOf(u8, request.output_schema, "rollback") != null)
+            \\{"steps":["echo stub-plan-step"],"rollback":"echo analyst-plan-rollback","contingencies":["re-run verify"]}
+        else
             \\{"status":"stub","note":"set OPENAI_COMPAT_URL, ANTHROPIC_API_KEY, or OLLAMA_HOST"}
         ;
         return .{
             .content_json = try allocator.dupe(u8, json),
-            .tokens_used = 0,
+            .tokens_used = @intCast(json.len),
         };
     }
 

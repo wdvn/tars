@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("../../../types.zig");
 const llm = @import("../../../llm/mod.zig");
 const rb = @import("block.zig");
+const invoke_llm = @import("invoke_llm.zig");
 
 const output_schema =
     \\{"type":"object","properties":{"options":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"cost":{"type":"array","items":{"type":"string"}},"benefit":{"type":"array","items":{"type":"string"}}},"required":["name","cost","benefit"]}}},"required":["options"]}
@@ -22,7 +23,6 @@ pub fn block() rb.Block {
     };
 }
 
-/// Resolve constraint conflicts into ranked options with cost/benefit arrays.
 fn invoke(
     ptr: *anyopaque,
     allocator: std.mem.Allocator,
@@ -30,21 +30,7 @@ fn invoke(
     ctx: *const types.MissionContext,
 ) types.BlockError!types.BlockResult {
     _ = ptr;
-    const prompt = rb.assemblePrompt(allocator, system_prompt, ctx, output_schema) catch return types.BlockError.InvalidInput;
-    defer allocator.free(prompt);
-
-    const response = provider.complete(allocator, .{
-        .config = .{ .temperature = 0.15 },
-        .system = system_prompt,
-        .messages = &.{
-            .{ .role = "user", .content = prompt },
-        },
-        .output_schema = output_schema,
-    }) catch return types.BlockError.LlmFailed;
-    defer allocator.free(response.content_json);
-
-    const payload = allocator.dupe(u8, response.content_json) catch return types.BlockError.InvalidInput;
-    return .{ .kind = "trade_off", .payload_json = payload };
+    return invoke_llm.completeJson(allocator, provider, ctx, system_prompt, output_schema, "trade_off", 0.15);
 }
 
 var state: u8 = 0;

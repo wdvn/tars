@@ -27,16 +27,13 @@ pub const Block = struct {
     }
 };
 
-/// Stitch block template, mission fields, evidence, and JSON schema into one user prompt.
-pub fn assemblePrompt(
+/// User message body — mission context + evidence (system prompt goes to LLM .system separately).
+pub fn assembleUserPrompt(
     allocator: std.mem.Allocator,
-    template: []const u8,
     ctx: *const types.MissionContext,
     output_schema: []const u8,
 ) ![]const u8 {
     return std.fmt.allocPrint(allocator,
-        \\{s}
-        \\
         \\Mission: {s}
         \\Goal: {s}
         \\Phase: {s}
@@ -45,7 +42,6 @@ pub fn assemblePrompt(
         \\Respond ONLY with JSON matching:
         \\{s}
     , .{
-        template,
         ctx.mission_id,
         ctx.goal,
         ctx.phase.name(),
@@ -53,3 +49,15 @@ pub fn assemblePrompt(
         output_schema,
     });
 }
+
+/// Legacy alias — prefer assembleUserPrompt + separate system string.
+pub fn assemblePrompt(
+    allocator: std.mem.Allocator,
+    template: []const u8,
+    ctx: *const types.MissionContext,
+    output_schema: []const u8,
+) ![]const u8 {
+    _ = template;
+    return assembleUserPrompt(allocator, ctx, output_schema);
+}
+

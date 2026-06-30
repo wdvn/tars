@@ -13,6 +13,7 @@ echo "Initializing tars memory at: $DB_PATH"
 sqlite3 "$DB_PATH" < "$ROOT/memory/schema.sql"
 sqlite3 "$DB_PATH" < "$ROOT/memory/schema_session.sql"
 sqlite3 "$DB_PATH" < "$ROOT/memory/schema_metrics.sql"
+sqlite3 "$DB_PATH" < "$ROOT/memory/schema_executor.sql"
 
 if [[ -n "$VECTOR_EXT" && -f "$VECTOR_EXT" ]]; then
   echo "Loading sqlite-vector from: $VECTOR_EXT"
