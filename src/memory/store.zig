@@ -13,6 +13,7 @@ pub const query_write_path = "memory/queries/write.sql";
 pub const query_read_path = "memory/queries/read.sql";
 
 pub const embedding_dimension: u32 = 384;
+pub const default_db_path = ".tars/tars.db";
 
 pub const StoreError = error{
     SqliteFailed,

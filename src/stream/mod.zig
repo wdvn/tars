@@ -8,6 +8,7 @@ pub const format = @import("format.zig");
 pub const ChunkKind = enum {
     token,
     phase,
+    step,
     tool_start,
     tool_end,
     done,
@@ -55,6 +56,7 @@ pub const StdoutSink = struct {
         const prefix: []const u8 = switch (chunk.kind) {
             .token => "",
             .phase => "\n[phase] ",
+            .step => "\n[step] ",
             .tool_start => "\n[tool] ",
             .tool_end => "\n[/tool] ",
             .done => "\n[done] ",
@@ -157,3 +159,52 @@ pub fn emitToolEnd(io: std.Io, sink: ?Sink, kind: []const u8, success: bool, exi
     defer alloc.free(text);
     try s.emit(io, .{ .kind = .tool_end, .text = text });
 }
+
+/// Timed debug step — emit `→ label …` at start, `← label (Nms) detail` at end.
+pub const StepTrace = struct {
+    sink: Sink,
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    label: []const u8,
+    start: std.Io.Clock.Timestamp,
+
+    pub fn begin(allocator: std.mem.Allocator, io: std.Io, sink: Sink, label: []const u8) !StepTrace {
+        const owned = try allocator.dupe(u8, label);
+        errdefer allocator.free(owned);
+        const msg = try std.fmt.allocPrint(allocator, "→ {s} …", .{label});
+        defer allocator.free(msg);
+        try sink.emit(io, .{ .kind = .step, .text = msg });
+        return .{
+            .sink = sink,
+            .io = io,
+            .allocator = allocator,
+            .label = owned,
+            .start = std.Io.Clock.Timestamp.now(io, .awake),
+        };
+    }
+
+    pub fn end(self: *StepTrace, detail: []const u8) void {
+        const ms = self.start.untilNow(self.io).raw.toMilliseconds();
+        const msg = if (detail.len > 0)
+            std.fmt.allocPrint(self.allocator, "← {s} ({d}ms) {s}", .{ self.label, ms, detail }) catch null
+        else
+            std.fmt.allocPrint(self.allocator, "← {s} ({d}ms)", .{ self.label, ms }) catch null;
+        if (msg) |m| {
+            defer self.allocator.free(m);
+            self.sink.emit(self.io, .{ .kind = .step, .text = m }) catch {};
+        }
+        self.allocator.free(self.label);
+        self.* = undefined;
+    }
+
+    pub fn endErr(self: *StepTrace, err_name: []const u8) void {
+        const ms = self.start.untilNow(self.io).raw.toMilliseconds();
+        const msg = std.fmt.allocPrint(self.allocator, "← {s} ({d}ms) ERROR {s}", .{ self.label, ms, err_name }) catch null;
+        if (msg) |m| {
+            defer self.allocator.free(m);
+            self.sink.emit(self.io, .{ .kind = .step, .text = m }) catch {};
+        }
+        self.allocator.free(self.label);
+        self.* = undefined;
+    }
+};

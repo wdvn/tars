@@ -31,6 +31,7 @@ pub fn eventName(kind: stream.ChunkKind) []const u8 {
     return switch (kind) {
         .token => "token",
         .phase => "phase",
+        .step => "step",
         .tool_start => "tool_start",
         .tool_end => "tool_end",
         .done => "done",

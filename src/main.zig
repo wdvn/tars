@@ -72,7 +72,7 @@ fn finishMetrics(gpa: std.mem.Allocator, io: std.Io, store: *tars.memory.store.S
 
 /// Read-only metrics query against SQLite (no live instrumentation).
 fn runReport(gpa: std.mem.Allocator, io: std.Io, json: bool) !void {
-    var store = try tars.memory.store.Store.init(gpa, ".tars/tars.db");
+    var store = try tars.memory.store.Store.init(gpa, tars.memory.store.default_db_path);
     defer store.deinit();
     try store.applySchema(io);
 
@@ -120,8 +120,7 @@ fn runEmbedPull(gpa: std.mem.Allocator, io: std.Io) !void {
 
 /// End-to-end showcase of streaming, perception, recall, session, loop, and metrics.
 fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
-    const db_path = "/home/mypc/projects/tars/.tars/tars.db";
-    var store = try tars.memory.store.Store.init(gpa, db_path);
+    var store = try tars.memory.store.Store.init(gpa, tars.memory.store.default_db_path);
     defer store.deinit();
 
     try store.applySchema(io);
@@ -259,8 +258,7 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
 
 /// Interactive REPL with recall-augmented streaming responses.
 fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
-    const db_path = "/home/mypc/projects/tars/.tars/tars.db";
-    var store = try tars.memory.store.Store.init(gpa, db_path);
+    var store = try tars.memory.store.Store.init(gpa, tars.memory.store.default_db_path);
     defer store.deinit();
     try store.applySchema(io);
 
@@ -306,8 +304,14 @@ fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
 
         try sess.appendOperator(line);
 
+        var ctx_trace = tars.stream.StepTrace.begin(gpa, io, sink, "memory: assemble context") catch null;
         var pack = try tars.memory.context.assembleChatContext(gpa, io, &store, &sess, line, system_prompt, ctx_cfg);
         defer pack.deinit(gpa);
+        if (ctx_trace) |*t| {
+            const ctx_detail = std.fmt.allocPrint(gpa, "{d} msgs, {d} system chars", .{ pack.messages.len, pack.system.len }) catch null;
+            defer if (ctx_detail) |d| gpa.free(d);
+            t.end(ctx_detail orelse "");
+        }
 
         var turn = try tars.core.chat.runTurn(gpa, io, &store, &sess, provider, sink, line, &pack, .{
             .repo_root = ".",
@@ -315,7 +319,7 @@ fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
         defer turn.deinit(gpa);
 
         if (!turn.streamed) {
-            try w.print("{s}", .{turn.response});
+            try w.print("\n{s}", .{turn.response});
         }
         try sess.appendAgent("analyst", turn.response);
         try tars.memory.context.manageSessionSummary(gpa, &sess, ctx_cfg);
