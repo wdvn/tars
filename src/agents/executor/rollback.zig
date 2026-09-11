@@ -53,6 +53,7 @@ pub fn runPlanScript(
 ) !RollbackResult {
     if (script.len == 0) return .{};
 
+    const now: i64 = std.Io.Clock.real.now(io).toSeconds();
     metrics.gInc("executor.plan_rollback.total", 1);
 
     const act = types.Action{ .kind = .shell, .payload = script };
@@ -63,7 +64,7 @@ pub fn runPlanScript(
                 \\{{"trigger":"{s}","boundary":"{s}","reason":"{s}"}}
             , .{ trigger_reason, d.boundary, d.reason });
             defer allocator.free(detail);
-            store.appendAudit(io, mission_id, "executor", "action_denied", detail, 0) catch {};
+            store.appendAudit(io, mission_id, "executor", "action_denied", detail, now) catch {};
             return .{
                 .ran = false,
                 .denied = true,
@@ -76,7 +77,7 @@ pub fn runPlanScript(
         \\{{"event":"plan_rollback","trigger":"{s}","script_len":{d}}}
     , .{ trigger_reason, script.len });
     defer allocator.free(started);
-    store.appendAudit(io, mission_id, "executor", "action_started", started, 0) catch {};
+    store.appendAudit(io, mission_id, "executor", "action_started", started, now) catch {};
 
     const cmd = try std.fmt.allocPrint(allocator, "cd '{s}' && {s}", .{ repo_root, script });
     defer allocator.free(cmd);
@@ -106,7 +107,7 @@ pub fn runPlanScript(
         \\{{"event":"plan_rollback","success":{s},"exit":{d}}}
     , .{ if (success) "true" else "false", exit_code });
     defer allocator.free(done);
-    store.appendAudit(io, mission_id, "executor", "action_completed", done, 0) catch {};
+    store.appendAudit(io, mission_id, "executor", "action_completed", done, now) catch {};
 
     const artifact = try std.fmt.allocPrint(allocator,
         \\{{"trigger":"{s}","success":{s},"exit":{d}}}
@@ -119,7 +120,7 @@ pub fn runPlanScript(
         types.Agent.executor.name(),
         "action_result",
         artifact,
-        0,
+        now,
     ) catch {};
 
     return .{

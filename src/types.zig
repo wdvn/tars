@@ -165,3 +165,35 @@ pub const MonitorError = error{
     StorageUnavailable,
     OutOfMemory,
 };
+
+const std = @import("std");
+
+test "Agent name mapping" {
+    try std.testing.expectEqualStrings("analyst", Agent.analyst.name());
+    try std.testing.expectEqualStrings("executor", Agent.executor.name());
+    try std.testing.expectEqualStrings("monitor", Agent.monitor.name());
+}
+
+test "Phase name mapping" {
+    try std.testing.expectEqualStrings("orient", Phase.orient.name());
+    try std.testing.expectEqualStrings("assess", Phase.assess.name());
+    try std.testing.expectEqualStrings("plan", Phase.plan.name());
+    try std.testing.expectEqualStrings("act", Phase.act.name());
+    try std.testing.expectEqualStrings("verify", Phase.verify.name());
+}
+
+test "MissionStatus name" {
+    try std.testing.expectEqualStrings("orient", MissionStatus.orient.name());
+    try std.testing.expectEqualStrings("done", MissionStatus.done.name());
+    try std.testing.expectEqualStrings("blocked", MissionStatus.blocked.name());
+}
+
+test "ActionKind name" {
+    try std.testing.expectEqualStrings("shell", ActionKind.shell.name());
+    try std.testing.expectEqualStrings("file_edit", ActionKind.file_edit.name());
+    try std.testing.expectEqualStrings("git", ActionKind.git.name());
+    try std.testing.expectEqualStrings("verify", ActionKind.verify.name());
+    try std.testing.expectEqualStrings("mcp", ActionKind.mcp.name());
+    try std.testing.expectEqualStrings("skill", ActionKind.skill.name());
+}
+

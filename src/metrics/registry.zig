@@ -114,3 +114,26 @@ pub fn find(name: []const u8) ?Def {
 pub fn unitFor(name: []const u8) Unit {
     return find(name).?.unit;
 }
+
+test "Unit name" {
+    try std.testing.expectEqualStrings("count", Unit.count.name());
+    try std.testing.expectEqualStrings("bytes", Unit.bytes.name());
+    try std.testing.expectEqualStrings("tokens", Unit.tokens.name());
+    try std.testing.expectEqualStrings("milliseconds", Unit.milliseconds.name());
+}
+
+test "find metric" {
+    const d1 = find("llm.requests.total");
+    try std.testing.expect(d1 != null);
+    try std.testing.expectEqual(Unit.count, d1.?.unit);
+    try std.testing.expectEqualStrings("llm", d1.?.subsystem);
+
+    const d2 = find("non.existent.metric");
+    try std.testing.expect(d2 == null);
+}
+
+test "unitFor known metric" {
+    try std.testing.expectEqual(Unit.tokens, unitFor("llm.tokens.total"));
+    try std.testing.expectEqual(Unit.milliseconds, unitFor("llm.latency_ms.total"));
+}
+

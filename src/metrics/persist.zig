@@ -7,7 +7,7 @@ const store_mod = @import("../memory/store.zig");
 
 pub fn flush(m: *const collector.Metrics, st: *const store_mod.Store, io: std.Io) !void {
     // Write one metric_runs row then fan out all in-memory counter buckets.
-    const finished_at: i64 = 0;
+    const finished_at: i64 = std.Io.Clock.real.now(io).toSeconds();
     try st.beginMetricRun(io, m.run_id, m.command, m.started_at, m.meta_json);
 
     var it = m.totals.iterator();

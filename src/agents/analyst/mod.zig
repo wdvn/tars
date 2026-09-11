@@ -30,7 +30,7 @@ pub const Analyst = struct {
             results.deinit(allocator);
         }
 
-        const now: i64 = 0; // TODO: wall clock when std.time API is wired for Zig 0.16
+        const now: i64 = std.Io.Clock.real.now(self.io).toSeconds();
 
         for (registry) |b| {
             if (b.phase != ctx.phase) continue;

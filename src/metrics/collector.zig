@@ -37,6 +37,13 @@ pub const Metrics = struct {
         };
     }
 
+    /// Initialize metrics and capture wall-clock start time via Zig 0.16 Io clock.
+    pub fn initWithIo(allocator: std.mem.Allocator, io: std.Io, command: []const u8, label: []const u8) !Metrics {
+        var m = try init(allocator, command, label);
+        m.started_at = std.Io.Clock.real.now(io).toSeconds();
+        return m;
+    }
+
     pub fn deinit(self: *Metrics) void {
         // Free every owned hash-map key before destroying the maps.
         var it = self.totals.iterator();

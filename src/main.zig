@@ -31,8 +31,8 @@ pub fn main(init: std.process.Init) !void {
 }
 
 /// Wire global metrics handle for cross-module instrumentation during a command.
-fn initMetrics(gpa: std.mem.Allocator, command: []const u8, out: *tars.metrics.Metrics) !void {
-    out.* = try tars.metrics.Metrics.init(gpa, command, "tars");
+fn initMetrics(gpa: std.mem.Allocator, io: std.Io, command: []const u8, out: *tars.metrics.Metrics) !void {
+    out.* = try tars.metrics.Metrics.initWithIo(gpa, io, command, "tars");
     tars.metrics.setGlobal(out);
 }
 
@@ -76,7 +76,7 @@ fn runReport(gpa: std.mem.Allocator, io: std.Io, json: bool) !void {
     defer store.deinit();
     try store.applySchema(io);
 
-    var m = try tars.metrics.Metrics.init(gpa, "report", "query");
+    var m = try tars.metrics.Metrics.initWithIo(gpa, io, "report", "query");
     defer m.deinit();
 
     const db = try tars.metrics.report.loadDbTotals(&store, io, gpa);
@@ -133,7 +133,7 @@ fn runDemo(gpa: std.mem.Allocator, io: std.Io) !void {
     const w = &stdout_writer.interface;
 
     var metrics_state: tars.metrics.Metrics = undefined;
-    try initMetrics(gpa, "demo", &metrics_state);
+    try initMetrics(gpa, io, "demo", &metrics_state);
     defer finishMetrics(gpa, io, &store, &metrics_state, w, false) catch {};
 
     try w.print("tars runtime demo — streaming · perception · recall · session · loop\n\n", .{});
@@ -267,7 +267,7 @@ fn runChat(gpa: std.mem.Allocator, io: std.Io) !void {
     const w = &stdout_writer.interface;
 
     var metrics_state: tars.metrics.Metrics = undefined;
-    try initMetrics(gpa, "chat", &metrics_state);
+    try initMetrics(gpa, io, "chat", &metrics_state);
     defer finishMetrics(gpa, io, &store, &metrics_state, w, false) catch {};
 
     const embed_ctx = try tars.memory.embed.resolve(gpa, io);

@@ -61,3 +61,34 @@ pub fn toLlmMessage(allocator: std.mem.Allocator, turn: Turn) ParseError!llm.Mes
     const prefixed = try std.fmt.allocPrint(allocator, "[{s}] {s}", .{ turn.role, turn.content });
     return .{ .role = "user", .content = prefixed };
 }
+
+test "parseTurnsJson and toLlmMessage" {
+    const json_blob =
+        \\{"role":"operator","content":"Hello TARS"}
+        \\{"role":"analyst","content":"Greetings, Cooper."}
+        \\{"role":"monitor","content":"All systems nominal."}
+    ;
+
+    const turns = try parseTurnsJson(std.testing.allocator, json_blob);
+    defer freeTurns(std.testing.allocator, turns);
+
+    try std.testing.expectEqual(@as(usize, 3), turns.len);
+    try std.testing.expectEqualStrings("operator", turns[0].role);
+    try std.testing.expectEqualStrings("Hello TARS", turns[0].content);
+
+    const m0 = try toLlmMessage(std.testing.allocator, turns[0]);
+    defer std.testing.allocator.free(m0.content);
+    try std.testing.expectEqualStrings("user", m0.role);
+    try std.testing.expectEqualStrings("Hello TARS", m0.content);
+
+    const m1 = try toLlmMessage(std.testing.allocator, turns[1]);
+    defer std.testing.allocator.free(m1.content);
+    try std.testing.expectEqualStrings("assistant", m1.role);
+    try std.testing.expectEqualStrings("Greetings, Cooper.", m1.content);
+
+    const m2 = try toLlmMessage(std.testing.allocator, turns[2]);
+    defer std.testing.allocator.free(m2.content);
+    try std.testing.expectEqualStrings("user", m2.role);
+    try std.testing.expectEqualStrings("[monitor] All systems nominal.", m2.content);
+}
+

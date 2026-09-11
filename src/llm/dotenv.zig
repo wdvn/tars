@@ -91,22 +91,9 @@ fn ingestFile(allocator: std.mem.Allocator, io: std.Io, map: *std.StringHashMap(
 
     var lines = std.mem.splitScalar(u8, result.stdout, '\n');
     while (lines.next()) |raw| {
-        const line = std.mem.trim(u8, raw, " \t\r");
-        if (line.len == 0 or line[0] == '#') continue;
-
-        const eff = if (std.mem.startsWith(u8, line, "export "))
-            std.mem.trim(u8, line["export ".len..], " \t")
-        else
-            line;
-
-        const eq = std.mem.indexOfScalar(u8, eff, '=') orelse continue;
-        const key = std.mem.trim(u8, eff[0..eq], " \t");
-        var val = std.mem.trim(u8, eff[eq + 1 ..], " \t");
-
-        if (val.len >= 2 and ((val[0] == '"' and val[val.len - 1] == '"') or (val[0] == '\'' and val[val.len - 1] == '\''))) {
-            val = val[1 .. val.len - 1];
-        }
-        if (key.len == 0 or key.len > 255) continue;
+        const pair = parseLine(raw) orelse continue;
+        const key = pair.key;
+        const val = pair.val;
 
         // Shell environment always wins — skip keys already exported.
         if (try shellGet(allocator, io, key)) |existing| {
@@ -122,3 +109,42 @@ fn ingestFile(allocator: std.mem.Allocator, io: std.Io, map: *std.StringHashMap(
         try map.put(owned_key, owned_val);
     }
 }
+
+/// Parse a single KEY=VAL line, handling comments, export prefix, and quotes.
+pub fn parseLine(raw: []const u8) ?struct { key: []const u8, val: []const u8 } {
+    const line = std.mem.trim(u8, raw, " \t\r");
+    if (line.len == 0 or line[0] == '#') return null;
+
+    const eff = if (std.mem.startsWith(u8, line, "export "))
+        std.mem.trim(u8, line["export ".len..], " \t")
+    else
+        line;
+
+    const eq = std.mem.indexOfScalar(u8, eff, '=') orelse return null;
+    const key = std.mem.trim(u8, eff[0..eq], " \t");
+    var val = std.mem.trim(u8, eff[eq + 1 ..], " \t");
+
+    if (val.len >= 2 and ((val[0] == '"' and val[val.len - 1] == '"') or (val[0] == '\'' and val[val.len - 1] == '\''))) {
+        val = val[1 .. val.len - 1];
+    }
+    if (key.len == 0 or key.len > 255) return null;
+    return .{ .key = key, .val = val };
+}
+
+test "dotenv parseLine" {
+    try std.testing.expect(parseLine("# comment line") == null);
+    try std.testing.expect(parseLine("   ") == null);
+
+    const p1 = parseLine("FOO=bar").?;
+    try std.testing.expectEqualStrings("FOO", p1.key);
+    try std.testing.expectEqualStrings("bar", p1.val);
+
+    const p2 = parseLine("export BAZ=\"hello world\"").?;
+    try std.testing.expectEqualStrings("BAZ", p2.key);
+    try std.testing.expectEqualStrings("hello world", p2.val);
+
+    const p3 = parseLine("  KEY  =  'single quoted'  ").?;
+    try std.testing.expectEqualStrings("KEY", p3.key);
+    try std.testing.expectEqualStrings("single quoted", p3.val);
+}
+

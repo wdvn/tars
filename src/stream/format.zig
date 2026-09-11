@@ -62,3 +62,31 @@ pub fn encodeNdjson(allocator: std.mem.Allocator, kind: stream.ChunkKind, text: 
 fn escapeJsonString(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     return @import("../llm/json_util.zig").escapeString(allocator, text);
 }
+
+test "Format fromName" {
+    try std.testing.expectEqual(Format.plain, Format.fromName("plain"));
+    try std.testing.expectEqual(Format.sse, Format.fromName("sse"));
+    try std.testing.expectEqual(Format.sse, Format.fromName("SSE"));
+    try std.testing.expectEqual(Format.ndjson, Format.fromName("ndjson"));
+    try std.testing.expectEqual(Format.plain, Format.fromName("unknown"));
+}
+
+test "eventName mapping" {
+    try std.testing.expectEqualStrings("token", eventName(.token));
+    try std.testing.expectEqualStrings("phase", eventName(.phase));
+    try std.testing.expectEqualStrings("done", eventName(.done));
+    try std.testing.expectEqualStrings("error", eventName(.error_msg));
+}
+
+test "encodeSse and encodeNdjson" {
+    const sse_frame = try encodeSse(std.testing.allocator, .token, "hello");
+    defer std.testing.allocator.free(sse_frame);
+    try std.testing.expect(std.mem.startsWith(u8, sse_frame, "event: token\n"));
+    try std.testing.expect(std.mem.endsWith(u8, sse_frame, "\n\n"));
+
+    const ndjson_frame = try encodeNdjson(std.testing.allocator, .phase, "orient");
+    defer std.testing.allocator.free(ndjson_frame);
+    try std.testing.expect(std.mem.startsWith(u8, ndjson_frame, "{\"type\":\"phase\""));
+    try std.testing.expect(std.mem.endsWith(u8, ndjson_frame, "\n"));
+}
+

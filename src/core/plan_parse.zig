@@ -180,3 +180,38 @@ fn unescapeJsonString(allocator: std.mem.Allocator, text: []const u8) ![]const u
     }
     return buf.toOwnedSlice(allocator);
 }
+
+test "fromPlannerJson valid plan" {
+    const plan_json =
+        \\{
+        \\  "steps": [
+        \\    "git:status",
+        \\    "mcp:fetch_data",
+        \\    "skill:summarize",
+        \\    "shell:echo done"
+        \\  ],
+        \\  "rollback": "git reset --hard"
+        \\}
+    ;
+
+    var owned = try fromPlannerJson(std.testing.allocator, "m-test", plan_json);
+    defer owned.deinit(std.testing.allocator);
+
+    const approved = owned.asApproved();
+    try std.testing.expectEqualStrings("m-test", approved.mission_id);
+    try std.testing.expectEqualStrings("git reset --hard", approved.rollback);
+    try std.testing.expectEqual(@as(usize, 4), approved.steps.len);
+
+    try std.testing.expectEqual(types.ActionKind.git, approved.steps[0].kind);
+    try std.testing.expectEqualStrings("status", approved.steps[0].payload);
+
+    try std.testing.expectEqual(types.ActionKind.mcp, approved.steps[1].kind);
+    try std.testing.expectEqualStrings("fetch_data", approved.steps[1].payload);
+
+    try std.testing.expectEqual(types.ActionKind.skill, approved.steps[2].kind);
+    try std.testing.expectEqualStrings("summarize", approved.steps[2].payload);
+
+    try std.testing.expectEqual(types.ActionKind.shell, approved.steps[3].kind);
+    try std.testing.expectEqualStrings("echo done", approved.steps[3].payload);
+}
+

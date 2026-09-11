@@ -39,7 +39,7 @@ pub const Executor = struct {
         var completed: std.ArrayList(types.ActionResult) = .empty;
         errdefer freeResults(allocator, &completed);
 
-        const now: i64 = 0;
+        const now: i64 = std.Io.Clock.real.now(self.io).toSeconds();
 
         for (plan.steps, 0..) |step, i| {
             if (i < opts.from_step) continue;
