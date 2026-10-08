@@ -14,7 +14,7 @@ A comparison between **tars** (this project) and **[mini-agent](https://github.c
 |---|----------|------------------------------|
 | **Goal** | Architecture-driven tactical autonomous agent, inspired by T.A.R.S. in *Interstellar* | Small, pragmatic terminal AI agent, ready to use |
 | **Philosophy** | Design-led: architecture, safety, auditability | Minimal, dependency-free, single runnable binary |
-| **Language** | Zig 0.16+ | Zig 0.16.0 (upgraded from 0.15.2) |
+| **Language** | Go 1.24+ | Zig 0.16.0 (upgraded from 0.15.2) |
 | **Size** | ~4.4k lines of Zig | ~4.5k lines of Zig |
 | **Status** | Skeleton + runtime demo (early stage) | Complete 1.0.0 release, ~12MB binary |
 | **License** | (see `LICENSE`) | MIT |
@@ -57,7 +57,7 @@ A comparison between **tars** (this project) and **[mini-agent](https://github.c
 | **Runtime backend switch** | Via environment variables | `/model <backend> <model>` live in REPL |
 | **Configuration** | Env (`TARS_VECTOR_EXT`, `TARS_MCP_CMD`) | Auto-load `.env` (CWD, `~/.mini/.env`), many env vars |
 | **System prompt** | In-code reasoning blocks | Custom `.md` file (`MINI_SYSTEM_FILE`) |
-| **Distribution** | `zig build` | Single binary, cross-compile, install to PATH |
+| **Distribution** | `go build` / `Makefile` | Single binary, cross-compile, install to PATH |
 | **Bundled example** | Internal demo | Newspaper agent (HN + arXiv digest) |
 
 ---

@@ -14,7 +14,7 @@ So sánh giữa **tars** (dự án này) và **[mini-agent](https://github.com/w
 |---|----------|------------------------------|
 | **Mục tiêu** | Agent tự trị chiến thuật theo mô hình kiến trúc, lấy cảm hứng từ T.A.R.S. trong *Interstellar* | AI agent terminal nhỏ gọn, thực dụng, dùng được ngay |
 | **Triết lý** | Thiết kế dẫn dắt: kiến trúc, an toàn, khả năng kiểm toán | Tối giản, không phụ thuộc, 1 binary chạy được ngay |
-| **Ngôn ngữ** | Zig 0.16+ | Zig 0.16.0 (nâng từ 0.15.2) |
+| **Ngôn ngữ** | Go 1.24+ | Zig 0.16.0 (nâng từ 0.15.2) |
 | **Quy mô** | ~4.4k dòng Zig | ~4.5k dòng Zig |
 | **Trạng thái** | Skeleton + runtime demo (giai đoạn đầu) | Bản 1.0.0 hoàn chỉnh, ~12MB binary |
 | **License** | (xem `LICENSE`) | MIT |
@@ -57,7 +57,7 @@ So sánh giữa **tars** (dự án này) và **[mini-agent](https://github.com/w
 | **Đổi backend runtime** | Qua biến môi trường | `/model <backend> <model>` ngay trong REPL |
 | **Cấu hình** | Env (`TARS_VECTOR_EXT`, `TARS_MCP_CMD`) | Auto-load `.env` (CWD, `~/.mini/.env`), nhiều env var |
 | **System prompt** | Trong code reasoning blocks | File `.md` tùy chỉnh (`MINI_SYSTEM_FILE`) |
-| **Phân phối** | `zig build` | 1 binary, cross-compile, cài vào PATH |
+| **Phân phối** | `go build` / `Makefile` | 1 binary, cross-compile, cài vào PATH |
 | **Ví dụ kèm theo** | Demo nội bộ | Newspaper agent (HN + arXiv digest) |
 
 ---
