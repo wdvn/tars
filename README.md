@@ -19,12 +19,12 @@ Like T.A.R.S. in *Interstellar* — a tactical partner: honest, pragmatic, ready
 
 ## Build & run
 
-Requires [Zig](https://ziglang.org/) 0.16+ and `sqlite3` CLI.
+Requires [Go](https://go.dev/) 1.24+ and `sqlite3` CLI.
 
 ```bash
 cp .env.example .env          # optional: Ollama / cloud LLM settings
-zig build init-db             # create .tars/tars.db
-zig build                     # build ./bin/tars
+make init-db                  # create .tars/tars.db
+make build                    # build ./bin/tars
 ```
 
 ### Run modes

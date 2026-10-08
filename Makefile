@@ -1,34 +1,36 @@
-# tars — Zig build wrapper
-# Requires: Zig 0.16+, sqlite3 (for init-db / runtime)
+# tars — Go 1.24 build wrapper
+# Requires: Go 1.24+, sqlite3 CLI (for memory/init.sh)
 
-ZIG ?= $(shell which zig 2>/dev/null || [ -x $(HOME)/.zvm/bin/zig ] && echo $(HOME)/.zvm/bin/zig || echo zig)
-PREFIX ?= zig-out
+GO ?= go
+BIN_DIR ?= bin
+TARGET ?= $(BIN_DIR)/tars
 
 .PHONY: build run test init-db clean help
 
 # Default target
 build:
-	$(ZIG) build
+	@mkdir -p $(BIN_DIR)
+	$(GO) build -o $(TARGET) ./cmd/tars
 
 run: build
-	$(ZIG) build run -- $(ARGS)
+	$(TARGET) $(ARGS)
 
 test:
-	$(ZIG) build test
+	$(GO) test -v ./...
 
 init-db:
-	$(ZIG) build init-db
+	bash memory/init.sh
 
 clean:
-	rm -rf .zig-cache $(PREFIX) bin
+	rm -rf $(BIN_DIR)
 
 help:
 	@echo "tars Makefile targets:"
-	@echo "  make build     — compile (zig build)"
+	@echo "  make build     — compile (go build -o bin/tars ./cmd/tars)"
 	@echo "  make run       — build and run demo (ARGS='chat' for REPL)"
-	@echo "  make test      — run tests (zig build test)"
+	@echo "  make test      — run unit tests (go test -v ./...)"
 	@echo "  make init-db   — initialize .tars/tars.db"
-	@echo "  make clean     — remove .zig-cache, $(PREFIX)/, and bin/"
+	@echo "  make clean     — remove bin/"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make build"
